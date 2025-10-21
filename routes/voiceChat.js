@@ -231,12 +231,17 @@ function extractToken(req) {
   // Try query parameter first
   const url = new URL(req.url, `http://${req.headers.host}`);
   const tokenFromQuery = url.searchParams.get("token");
-  if (tokenFromQuery) return tokenFromQuery;
+  if (tokenFromQuery) {
+    console.log("[VOICE-REALTIME][extractToken] Token from query param:", tokenFromQuery);
+    return tokenFromQuery;
+  }
 
   // Try authorization header
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {
-    return authHeader.substring(7);
+    const token = authHeader.substring(7);
+    console.log("[VOICE-REALTIME][extractToken] Token from Authorization header:", token);
+    return token;
   }
 
   // Try sec-websocket-protocol header (some clients use this)
@@ -245,11 +250,14 @@ function extractToken(req) {
     const protocols = protocol.split(",").map((p) => p.trim());
     for (const p of protocols) {
       if (p.startsWith("bearer.")) {
-        return p.substring(7);
+        const token = p.substring(7);
+        console.log("[VOICE-REALTIME][extractToken] Token from sec-websocket-protocol:", token);
+        return token;
       }
     }
   }
 
+  console.log("[VOICE-REALTIME][extractToken] No token found in request");
   return null;
 }
 
