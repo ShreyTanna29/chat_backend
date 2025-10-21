@@ -25,14 +25,6 @@ const chatValidation = [
     .optional()
     .isIn(["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"])
     .withMessage("Invalid model specified"),
-  body("temperature")
-    .optional()
-    .isFloat({ min: 0, max: 2 })
-    .withMessage("Temperature must be between 0 and 2"),
-  body("maxTokens")
-    .optional()
-    .isInt({ min: 1, max: 4000 })
-    .withMessage("Max tokens must be between 1 and 4000"),
 ];
 
 // @route   POST /api/chat/stream
@@ -44,8 +36,6 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     const imageFile = req.file;
     // Always use GPT-5 for text, gpt-5-mini for image
     let model = imageFile ? "gpt-5-mini" : "gpt-5";
-    const temperature = 0.7;
-    const maxTokens = 1000;
 
     if (!prompt && !imageFile) {
       return res.status(400).json({
@@ -99,8 +89,6 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
       const stream = await openai.chat.completions.create({
         model,
         messages,
-        temperature,
-        max_tokens: maxTokens,
         stream: true,
       });
 
@@ -180,12 +168,7 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
       });
     }
 
-    const {
-      prompt,
-      model = "gpt-3.5-turbo",
-      temperature = 0.7,
-      maxTokens = 1000,
-    } = req.body;
+    const { prompt, model = "gpt-3.5-turbo" } = req.body;
 
     // Create the chat completion
     const completion = await openai.chat.completions.create({
@@ -201,8 +184,6 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
           content: prompt,
         },
       ],
-      temperature: temperature,
-      max_tokens: maxTokens,
     });
 
     const response = completion.choices[0]?.message?.content || "";
@@ -296,8 +277,6 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
     const completion = await openai.chat.completions.create({
       model,
       messages,
-      max_tokens: 1000,
-      temperature: 0.7,
     });
 
     const response = completion.choices[0]?.message?.content || "";
@@ -431,8 +410,6 @@ router.post("/voice", auth, upload.single("audio"), async (req, res) => {
         },
         { role: "user", content: userText },
       ],
-      max_tokens: 1000,
-      temperature: 0.7,
     });
     const aiText = aiResp.choices[0]?.message?.content || "";
 
