@@ -34,8 +34,8 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
   try {
     const prompt = req.body.prompt;
     const imageFile = req.file;
-    // Always use GPT-5 for text, gpt-5-mini for image
-    let model = imageFile ? "gpt-5-mini" : "gpt-5";
+    // Always use gpt-4.1-mini by default
+    let model = "gpt-4.1-mini";
 
     if (!prompt && !imageFile) {
       return res.status(400).json({
@@ -93,6 +93,8 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
       });
 
       let fullResponse = "";
+      console.log(`[STREAM] Starting stream with model: ${model}`);
+
       for await (const chunk of stream) {
         const content = chunk.choices[0]?.delta?.content || "";
         if (content) {
@@ -106,6 +108,9 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
           );
         }
         if (chunk.choices[0]?.finish_reason) {
+          console.log(
+            `[STREAM] Response received from ${model} - Length: ${fullResponse.length} chars, Finish reason: ${chunk.choices[0].finish_reason}`
+          );
           res.write(
             `data: ${JSON.stringify({
               type: "done",
@@ -168,7 +173,9 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
       });
     }
 
-    const { prompt, model = "gpt-3.5-turbo" } = req.body;
+    const { prompt, model = "gpt-4.1-mini" } = req.body;
+
+    console.log(`[SIMPLE] Sending request to model: ${model}`);
 
     // Create the chat completion
     const completion = await openai.chat.completions.create({
@@ -187,6 +194,11 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
     });
 
     const response = completion.choices[0]?.message?.content || "";
+    console.log(
+      `[SIMPLE] Response received from ${model} - Length: ${
+        response.length
+      } chars, Tokens used: ${completion.usage?.total_tokens || "N/A"}`
+    );
 
     // Save to user's search history
     try {
@@ -245,8 +257,8 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
       });
     }
 
-    // Always use GPT-4 for this route
-    const model = imageFile ? "gpt-4-vision-preview" : "gpt-5";
+    // Always use gpt-4.1-mini by default
+    const model = "gpt-4.1-mini";
     const messages = [
       {
         role: "system",
@@ -274,12 +286,21 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
       messages.push({ role: "user", content: prompt });
     }
 
+    console.log(
+      `[ASK] Sending request to model: ${model}, Has image: ${!!imageFile}`
+    );
+
     const completion = await openai.chat.completions.create({
       model,
       messages,
     });
 
     const response = completion.choices[0]?.message?.content || "";
+    console.log(
+      `[ASK] Response received from ${model} - Length: ${
+        response.length
+      } chars, Tokens used: ${completion.usage?.total_tokens || "N/A"}`
+    );
 
     // Save to user's search history
     try {
@@ -391,6 +412,7 @@ router.post("/voice", auth, upload.single("audio"), async (req, res) => {
     }
 
     // Step 1: Transcribe user audio to text using OpenAI Whisper
+    console.log(`[VOICE] Transcribing audio with Whisper`);
     const transcriptResp = await openai.audio.transcriptions.create({
       file: Readable.from(audioFile.buffer),
       model: "whisper-1",
@@ -398,10 +420,15 @@ router.post("/voice", auth, upload.single("audio"), async (req, res) => {
       language: "en",
     });
     const userText = transcriptResp.text || transcriptResp;
+    console.log(
+      `[VOICE] Transcription received - Text length: ${userText.length} chars`
+    );
 
-    // Step 2: Get AI response using GPT-5
+    // Step 2: Get AI response using gpt-4.1-mini
+    const chatModel = "gpt-4.1-mini";
+    console.log(`[VOICE] Sending request to model: ${chatModel}`);
     const aiResp = await openai.chat.completions.create({
-      model: "gpt-5",
+      model: chatModel,
       messages: [
         {
           role: "system",
@@ -412,14 +439,19 @@ router.post("/voice", auth, upload.single("audio"), async (req, res) => {
       ],
     });
     const aiText = aiResp.choices[0]?.message?.content || "";
+    console.log(
+      `[VOICE] Response received from ${chatModel} - Length: ${aiText.length} chars`
+    );
 
     // Step 3: Synthesize AI response to voice using OpenAI TTS
+    console.log(`[VOICE] Generating speech with TTS`);
     const ttsResp = await openai.audio.speech.create({
       model: "tts-1",
       input: aiText,
       voice: "alloy",
       response_format: "mp3",
     });
+    console.log(`[VOICE] Speech generated successfully`);
 
     // Save to user's search history
     try {
