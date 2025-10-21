@@ -1,12 +1,15 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
+const http = require("http");
 const prisma = require("./config/database");
+const { initVoiceChat, closeAllSessions } = require("./routes/voiceChat");
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
+const server = http.createServer(app);
 
 // Middleware
 app.use(cors());
@@ -21,13 +24,20 @@ prisma
   })
   .catch((err) => console.error("Database connection error:", err));
 
+// Initialize WebSocket for real-time voice chat
+initVoiceChat(server);
+
 // Graceful shutdown
 process.on("SIGINT", async () => {
+  console.log("Shutting down gracefully...");
+  closeAllSessions();
   await prisma.$disconnect();
   process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
+  console.log("Shutting down gracefully...");
+  closeAllSessions();
   await prisma.$disconnect();
   process.exit(0);
 });
@@ -54,8 +64,11 @@ app.use((req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  console.log(
+    `WebSocket voice chat available at ws://localhost:${PORT}/api/chat/voice-realtime`
+  );
 });
 
 module.exports = app;

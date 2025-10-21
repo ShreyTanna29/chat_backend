@@ -406,6 +406,184 @@ Authorization: Bearer <access_token>
 }
 ```
 
+#### POST /api/chat/voice
+
+Voice-to-voice chat with AI using OpenAI's Whisper (speech-to-text), GPT-4.1-mini (chat), and TTS (text-to-speech).
+
+**Headers:**
+
+```
+Authorization: Bearer <access_token>
+Content-Type: multipart/form-data
+```
+
+**Request Body (Form Data):**
+
+- `audio`: Audio file (required) - Supported formats: mp3, mp4, mpeg, mpga, m4a, wav, webm
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "transcript": "What is artificial intelligence?",
+    "aiText": "Artificial intelligence (AI) refers to the simulation of human intelligence...",
+    "audio": "<base64_encoded_audio_or_buffer>",
+    "timestamp": "2023-01-01T00:00:00.000Z"
+  }
+}
+```
+
+**Process Flow:**
+
+1. User uploads audio file
+2. OpenAI Whisper transcribes audio to text
+3. GPT-4.1-mini generates AI response based on transcript
+4. OpenAI TTS synthesizes AI response to speech (MP3 format)
+5. Returns transcript, AI text response, and audio file
+
+**Example (cURL):**
+
+```bash
+curl -X POST http://localhost:3000/api/chat/voice \
+  -H "Authorization: Bearer <access_token>" \
+  -F "audio=@/path/to/audio.mp3"
+```
+
+#### WebSocket /api/chat/voice-realtime
+
+**Real-time bidirectional voice chat with AI** using WebSocket and OpenAI's Realtime API. This enables live conversation where the AI responds in real-time as you speak.
+
+**Connection URL:**
+
+```
+ws://localhost:3000/api/chat/voice-realtime?token=<jwt_token>
+```
+
+**Features:**
+
+- **Live Audio Streaming**: Stream audio directly to GPT-4 in real-time
+- **Bidirectional**: User speaks → AI responds immediately with voice
+- **VAD (Voice Activity Detection)**: Automatically detects when user starts/stops speaking
+- **Low Latency**: Real-time audio processing for natural conversation
+- **Transcription**: Optional transcription of both user and AI speech
+
+**Connection:**
+
+```javascript
+const ws = new WebSocket(
+  "ws://localhost:3000/api/chat/voice-realtime?token=YOUR_JWT_TOKEN"
+);
+
+ws.onopen = () => {
+  console.log("Connected to real-time voice chat");
+};
+
+ws.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+  // Handle different message types
+};
+```
+
+**Message Types (Client → Server):**
+
+1. **Append Audio Buffer** - Send audio data to AI
+
+```json
+{
+  "type": "input_audio_buffer.append",
+  "audio": "<base64_encoded_pcm16_audio>"
+}
+```
+
+2. **Commit Audio Buffer** - Signal end of audio input
+
+```json
+{
+  "type": "input_audio_buffer.commit"
+}
+```
+
+3. **Send Text Message** - Alternative to audio input
+
+```json
+{
+  "type": "conversation.item.create",
+  "item": {
+    "type": "message",
+    "role": "user",
+    "content": [{ "type": "input_text", "text": "Hello" }]
+  }
+}
+```
+
+4. **Request Response** - Ask AI to respond
+
+```json
+{
+  "type": "response.create"
+}
+```
+
+5. **Cancel Response** - Cancel ongoing AI response
+
+```json
+{
+  "type": "response.cancel"
+}
+```
+
+**Message Types (Server → Client):**
+
+1. **session.created** - Connection established
+2. **response.audio.delta** - Audio chunk from AI (base64 PCM16)
+3. **response.audio_transcript.delta** - Transcript of AI speech
+4. **input_audio_buffer.speech_started** - User started speaking
+5. **input_audio_buffer.speech_stopped** - User stopped speaking
+6. **response.done** - AI finished responding
+7. **error** - Error occurred
+
+**Audio Format:**
+
+- Format: PCM16 (16-bit PCM)
+- Sample Rate: 24000 Hz
+- Channels: Mono (1 channel)
+- Encoding: Base64
+
+**Example Client:**
+
+See `/examples/voiceChatClient.js` for a complete browser-based implementation using Web Audio API.
+
+**Quick Start:**
+
+```javascript
+const RealtimeVoiceChat = require("./examples/voiceChatClient");
+
+const voiceChat = new RealtimeVoiceChat("your-jwt-token");
+await voiceChat.connect();
+await voiceChat.startRecording(); // Start streaming audio to AI
+
+// AI will respond in real-time as you speak!
+```
+
+**Authentication:**
+
+Pass JWT token in one of three ways:
+
+1. Query parameter: `?token=<jwt_token>`
+2. Authorization header: `Authorization: Bearer <jwt_token>`
+3. WebSocket protocol: `Sec-WebSocket-Protocol: bearer.<jwt_token>`
+
+**Session Configuration:**
+
+- Model: `gpt-4o-realtime-preview-2024-10-01`
+- Voice: `alloy`
+- VAD Threshold: 0.5
+- Silence Duration: 500ms
+- Temperature: 0.8
+- Max Tokens: 4096
+
 ### Health Check
 
 #### GET /health
