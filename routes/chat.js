@@ -3,6 +3,7 @@ const OpenAI = require("openai");
 const auth = require("../middleware/auth");
 const User = require("../models/User");
 const Conversation = require("../models/Conversation");
+const Space = require("../models/Space");
 const { body, validationResult } = require("express-validator");
 const multer = require("multer");
 
@@ -115,6 +116,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     const conversationId = req.body.conversationId; // Optional: continue existing conversation
     const thinkMode =
       req.body.thinkMode === "true" || req.body.thinkMode === true; // Optional: use GPT-5 for advanced reasoning
+    const spaceId = req.body.spaceId || null; // Optional: run within a Space
 
     // Select model based on thinkMode
     let model = thinkMode ? "gpt-5-search-api" : "gpt-4.1-mini";
@@ -143,6 +145,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
       conversation = await Conversation.create({
         userId: req.user.id,
         title: "New Chat",
+        spaceId: spaceId || undefined,
       });
     }
 
@@ -190,15 +193,28 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
       } catch (_) {}
     });
 
+    // Load space (if provided) and build system prompts
+    let space = null;
+    if (spaceId) {
+      space = await Space.findById(spaceId);
+      if (!space || space.userId !== req.user.id) {
+        return res
+          .status(403)
+          .json({ success: false, message: "Access denied to space" });
+      }
+    }
+
     // Build messages array with conversation history
-    const messages = [
-      {
-        role: "system",
-        content: thinkMode
-          ? "You are a helpful AI assistant with web search capabilities. Use web search to find current, accurate information when needed. If an image is provided, analyze it and answer the user's question based on both the image and the prompt."
-          : "You are a helpful AI assistant. If an image is provided, analyze it and answer the user's question based on both the image and the prompt.",
-      },
-    ];
+    const messages = [];
+    if (space?.defaultPrompt) {
+      messages.push({ role: "system", content: space.defaultPrompt });
+    }
+    messages.push({
+      role: "system",
+      content: thinkMode
+        ? "You are a helpful AI assistant with web search capabilities. Use web search to find current, accurate information when needed. If an image is provided, analyze it and answer the user's question based on both the image and the prompt."
+        : "You are a helpful AI assistant. If an image is provided, analyze it and answer the user's question based on both the image and the prompt.",
+    });
 
     // Add conversation history if exists
     if (conversation.messages && conversation.messages.length > 0) {
@@ -483,7 +499,23 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
       });
     }
 
-    const { prompt, model = "gpt-4.1-mini", conversationId } = req.body;
+    const {
+      prompt,
+      model = "gpt-4.1-mini",
+      conversationId,
+      spaceId,
+    } = req.body;
+
+    // Validate space if provided
+    let space = null;
+    if (spaceId) {
+      space = await Space.findById(spaceId);
+      if (!space || space.userId !== req.user.id) {
+        return res
+          .status(403)
+          .json({ success: false, message: "Access denied to space" });
+      }
+    }
 
     // Get or create conversation
     let conversation;
@@ -502,19 +534,22 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
       conversation = await Conversation.create({
         userId: req.user.id,
         title: "New Chat",
+        spaceId: spaceId || undefined,
       });
     }
 
     console.log(`[SIMPLE] Sending request to model: ${model}`);
 
     // Build messages with conversation history
-    const messages = [
-      {
-        role: "system",
-        content:
-          "You are a helpful AI assistant similar to Perplexity. Provide accurate, informative, and well-structured responses. When possible, break down complex topics into clear sections.",
-      },
-    ];
+    const messages = [];
+    if (space?.defaultPrompt) {
+      messages.push({ role: "system", content: space.defaultPrompt });
+    }
+    messages.push({
+      role: "system",
+      content:
+        "You are a helpful AI assistant similar to Perplexity. Provide accurate, informative, and well-structured responses. When possible, break down complex topics into clear sections.",
+    });
 
     // Add conversation history
     if (conversation.messages && conversation.messages.length > 0) {
@@ -604,13 +639,24 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
 // @access  Private
 router.post("/ask", auth, upload.single("image"), async (req, res) => {
   try {
-    const { prompt, conversationId } = req.body;
+    const { prompt, conversationId, spaceId } = req.body;
     const imageFile = req.file;
     if (!prompt && !imageFile) {
       return res.status(400).json({
         success: false,
         message: "Prompt or image is required",
       });
+    }
+
+    // Validate space if provided
+    let space = null;
+    if (spaceId) {
+      space = await Space.findById(spaceId);
+      if (!space || space.userId !== req.user.id) {
+        return res
+          .status(403)
+          .json({ success: false, message: "Access denied to space" });
+      }
     }
 
     // Get or create conversation
@@ -630,18 +676,21 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
       conversation = await Conversation.create({
         userId: req.user.id,
         title: "New Chat",
+        spaceId: spaceId || undefined,
       });
     }
 
     // Always use gpt-4.1-mini by default
     const model = "gpt-4.1-mini";
-    const messages = [
-      {
-        role: "system",
-        content:
-          "You are a helpful AI assistant. If an image is provided, analyze it and answer the user's question based on both the image and the prompt.",
-      },
-    ];
+    const messages = [];
+    if (space?.defaultPrompt) {
+      messages.push({ role: "system", content: space.defaultPrompt });
+    }
+    messages.push({
+      role: "system",
+      content:
+        "You are a helpful AI assistant. If an image is provided, analyze it and answer the user's question based on both the image and the prompt.",
+    });
 
     // Add conversation history
     if (conversation.messages && conversation.messages.length > 0) {
@@ -1126,6 +1175,180 @@ router.get("/conversations/search", auth, async (req, res) => {
       message: "Failed to search conversations",
       error: error.message,
     });
+  }
+});
+
+// ============================================
+// Space Management Endpoints
+// ============================================
+
+// @route   GET /api/chat/spaces
+// @desc    List spaces for the authenticated user
+// @access  Private
+router.get("/spaces", auth, async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const result = await Space.findByUserId(req.user.id, { page, limit });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error("Get spaces error:", error);
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Failed to fetch spaces",
+        error: error.message,
+      });
+  }
+});
+
+// @route   POST /api/chat/spaces
+// @desc    Create a new space
+// @access  Private
+router.post("/spaces", auth, async (req, res) => {
+  try {
+    const { name, defaultPrompt } = req.body;
+    if (!name || !name.trim()) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Name is required" });
+    }
+    const space = await Space.create({
+      userId: req.user.id,
+      name: name.trim(),
+      defaultPrompt,
+    });
+    res.status(201).json({ success: true, data: space });
+  } catch (error) {
+    console.error("Create space error:", error);
+    // Handle unique constraint (userId,name)
+    if (error.code === "P2002") {
+      return res
+        .status(409)
+        .json({
+          success: false,
+          message: "A space with this name already exists",
+        });
+    }
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Failed to create space",
+        error: error.message,
+      });
+  }
+});
+
+// @route   GET /api/chat/spaces/:id
+// @desc    Get a specific space
+// @access  Private
+router.get("/spaces/:id", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const space = await Space.findById(id);
+    if (!space)
+      return res
+        .status(404)
+        .json({ success: false, message: "Space not found" });
+    if (space.userId !== req.user.id)
+      return res.status(403).json({ success: false, message: "Access denied" });
+    res.json({ success: true, data: space });
+  } catch (error) {
+    console.error("Get space error:", error);
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Failed to fetch space",
+        error: error.message,
+      });
+  }
+});
+
+// @route   PUT /api/chat/spaces/:id
+// @desc    Update space
+// @access  Private
+router.put("/spaces/:id", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, defaultPrompt } = req.body;
+    const space = await Space.findById(id);
+    if (!space)
+      return res
+        .status(404)
+        .json({ success: false, message: "Space not found" });
+    if (space.userId !== req.user.id)
+      return res.status(403).json({ success: false, message: "Access denied" });
+
+    const updated = await Space.update(id, { name, defaultPrompt });
+    res.json({ success: true, data: updated });
+  } catch (error) {
+    console.error("Update space error:", error);
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Failed to update space",
+        error: error.message,
+      });
+  }
+});
+
+// @route   DELETE /api/chat/spaces/:id
+// @desc    Delete space (conversations retained but detached)
+// @access  Private
+router.delete("/spaces/:id", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const space = await Space.findById(id);
+    if (!space)
+      return res
+        .status(404)
+        .json({ success: false, message: "Space not found" });
+    if (space.userId !== req.user.id)
+      return res.status(403).json({ success: false, message: "Access denied" });
+
+    await Space.delete(id);
+    res.json({ success: true, message: "Space deleted" });
+  } catch (error) {
+    console.error("Delete space error:", error);
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Failed to delete space",
+        error: error.message,
+      });
+  }
+});
+
+// @route   GET /api/chat/spaces/:id/conversations
+// @desc    List conversations within a space
+// @access  Private
+router.get("/spaces/:id/conversations", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+    const space = await Space.findById(id);
+    if (!space)
+      return res
+        .status(404)
+        .json({ success: false, message: "Space not found" });
+    if (space.userId !== req.user.id)
+      return res.status(403).json({ success: false, message: "Access denied" });
+
+    const result = await Space.listConversations(id, { page, limit });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error("List space conversations error:", error);
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Failed to list conversations",
+        error: error.message,
+      });
   }
 });
 

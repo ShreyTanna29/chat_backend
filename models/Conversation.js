@@ -7,12 +7,14 @@ class Conversation {
    * @returns {Promise<Object>} Created conversation
    */
   static async create(data) {
-    const { userId, title = "New Chat" } = data;
+    const { userId, title = "New Chat", spaceId } = data;
 
     return await prisma.conversation.create({
       data: {
         userId,
         title,
+        // include optional spaceId if provided
+        ...(spaceId ? { spaceId } : {}),
       },
       include: {
         messages: {

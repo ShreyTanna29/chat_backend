@@ -27,6 +27,7 @@ model User {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   conversations Conversation[]
+  spaces        Space[]
 
   @@map("users")
 }
@@ -37,10 +38,13 @@ model Conversation {
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   title     String    @default("New Chat")
   messages  Message[]
+  spaceId   String?
+  space     Space?    @relation(fields: [spaceId], references: [id], onDelete: SetNull)
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
   @@index([userId])
+  @@index([spaceId])
   @@map("conversations")
 }
 
@@ -55,4 +59,20 @@ model Message {
 
   @@index([conversationId])
   @@map("messages")
+}
+
+/// New: A Space groups conversations and provides an optional default system prompt
+model Space {
+  id            String         @id @default(cuid())
+  userId        String
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String
+  defaultPrompt String?        @db.Text
+  conversations Conversation[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@map("spaces")
 }
