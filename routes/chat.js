@@ -148,8 +148,9 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     const messages = [
       {
         role: "system",
-        content:
-          "You are a helpful AI assistant. If an image is provided, analyze it and answer the user's question based on both the image and the prompt.",
+        content: thinkMode
+          ? "You are a helpful AI assistant with web search capabilities. Use web search to find current, accurate information when needed. If an image is provided, analyze it and answer the user's question based on both the image and the prompt."
+          : "You are a helpful AI assistant. If an image is provided, analyze it and answer the user's question based on both the image and the prompt.",
       },
     ];
 
@@ -184,11 +185,23 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     }
 
     try {
-      const stream = await openai.chat.completions.create({
+      // Configure request options
+      const completionOptions = {
         model,
         messages,
         stream: true,
-      });
+      };
+
+      // Enable web search for GPT-5 in think mode
+      if (thinkMode && model === "gpt-5") {
+        completionOptions.tools = [
+          {
+            type: "web_search",
+          },
+        ];
+      }
+
+      const stream = await openai.chat.completions.create(completionOptions);
 
       let fullResponse = "";
       console.log(`[STREAM] Starting stream with model: ${model}`);
