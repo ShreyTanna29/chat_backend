@@ -97,7 +97,38 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
       });
     }
 
-    // IMPORTANT: Attempt to create the OpenAI stream BEFORE sending any body to allow proper HTTP error status propagation
+    // Prepare Server-Sent Events response upfront so the client gets an immediate connection
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "Cache-Control");
+    // Important for Nginx/Proxies to avoid buffering SSE
+    res.setHeader("X-Accel-Buffering", "no");
+    if (typeof res.flushHeaders === "function") res.flushHeaders();
+
+    // Send initial connection confirmation immediately
+    res.write(
+      `data: ${JSON.stringify({
+        type: "connected",
+        message: "Stream started",
+        conversationId: conversation.id,
+      })}\n\n`
+    );
+    if (typeof res.flush === "function") res.flush();
+
+    // Heartbeat to keep proxies from closing idle connections
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(": keep-alive\n\n");
+        if (typeof res.flush === "function") res.flush();
+      } catch (_) {}
+    }, 15000);
+    req.on("close", () => {
+      try {
+        clearInterval(heartbeat);
+      } catch (_) {}
+    });
 
     // Build messages array with conversation history
     const messages = [
@@ -145,22 +176,6 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
         stream: true,
       });
 
-      // Set up Server-Sent Events headers only after stream is successfully created
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Access-Control-Allow-Headers", "Cache-Control");
-
-      // Send initial connection confirmation
-      res.write(
-        `data: ${JSON.stringify({
-          type: "connected",
-          message: "Stream started",
-          conversationId: conversation.id,
-        })}\n\n`
-      );
-
       let fullResponse = "";
       console.log(`[STREAM] Starting stream with model: ${model}`);
 
@@ -175,6 +190,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
               timestamp: new Date().toISOString(),
             })}\n\n`
           );
+          if (typeof res.flush === "function") res.flush();
         }
         if (chunk.choices[0]?.finish_reason) {
           console.log(
@@ -188,6 +204,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
               timestamp: new Date().toISOString(),
             })}\n\n`
           );
+          if (typeof res.flush === "function") res.flush();
           break;
         }
       }
@@ -228,15 +245,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
         await User.addToSearchHistory(req.user.id, prompt || "[image]");
       } catch (historyError) {}
     } catch (openaiError) {
-      // If the OpenAI stream could not be created, we likely haven't sent the body yet. Respond with proper HTTP status.
-      if (!res.headersSent) {
-        const { status, body } = toAIErrorResponse(
-          openaiError,
-          "Failed to get response from AI service"
-        );
-        return res.status(status).json(body);
-      }
-      // If headers/body already streamed, emit SSE error event
+      // We already opened the SSE stream; emit an error event and close
       res.write(
         `data: ${JSON.stringify({
           type: "error",
@@ -245,8 +254,11 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
           timestamp: new Date().toISOString(),
         })}\n\n`
       );
+      if (typeof res.flush === "function") res.flush();
     }
+    clearInterval(heartbeat);
     res.write(`data: ${JSON.stringify({ type: "close" })}\n\n`);
+    if (typeof res.flush === "function") res.flush();
     res.end();
   } catch (error) {
     if (!res.headersSent) {
@@ -264,6 +276,10 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
         timestamp: new Date().toISOString(),
       })}\n\n`
     );
+    // ensure heartbeat is cleared if set
+    try {
+      clearInterval(heartbeat);
+    } catch (_) {}
     res.end();
   }
 });
