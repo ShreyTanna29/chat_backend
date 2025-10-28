@@ -68,7 +68,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     const imageFile = req.file;
     const conversationId = req.body.conversationId; // Optional: continue existing conversation
     // Always use gpt-4.1-mini by default
-    let model = "gpt-5-mini";
+    let model = "gpt-4.1-mini";
 
     if (!prompt && !imageFile) {
       return res.status(400).json({
