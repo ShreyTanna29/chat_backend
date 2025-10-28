@@ -158,6 +158,9 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     // Important for Nginx/Proxies to avoid buffering SSE
     res.setHeader("X-Accel-Buffering", "no");
     // Disable compression for SSE on some production setups
+    // Accumulate assistant output across the stream
+    let fullResponse = "";
+
     try {
       res.setHeader("Content-Encoding", "identity");
     } catch (_) {}
@@ -294,7 +297,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
             tool_choice: "none",
           });
 
-          let fullResponse = "";
+          // use outer fullResponse accumulator
           console.log(
             `[STREAM] Starting stream with model: ${model} (thinkMode + web_search)`
           );
@@ -335,7 +338,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
             stream: true,
           });
 
-          let fullResponse = "";
+          // use outer fullResponse accumulator
           console.log(`[STREAM] Starting stream with model: ${model}`);
           for await (const chunk of stream) {
             const content = chunk.choices[0]?.delta?.content || "";
@@ -375,7 +378,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
           stream: true,
         });
 
-        let fullResponse = "";
+        // use outer fullResponse accumulator
         console.log(`[STREAM] Starting stream with model: ${model}`);
 
         for await (const chunk of stream) {
@@ -1192,13 +1195,11 @@ router.get("/spaces", auth, async (req, res) => {
     res.json({ success: true, data: result });
   } catch (error) {
     console.error("Get spaces error:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to fetch spaces",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch spaces",
+      error: error.message,
+    });
   }
 });
 
@@ -1223,20 +1224,16 @@ router.post("/spaces", auth, async (req, res) => {
     console.error("Create space error:", error);
     // Handle unique constraint (userId,name)
     if (error.code === "P2002") {
-      return res
-        .status(409)
-        .json({
-          success: false,
-          message: "A space with this name already exists",
-        });
-    }
-    res
-      .status(500)
-      .json({
+      return res.status(409).json({
         success: false,
-        message: "Failed to create space",
-        error: error.message,
+        message: "A space with this name already exists",
       });
+    }
+    res.status(500).json({
+      success: false,
+      message: "Failed to create space",
+      error: error.message,
+    });
   }
 });
 
@@ -1256,13 +1253,11 @@ router.get("/spaces/:id", auth, async (req, res) => {
     res.json({ success: true, data: space });
   } catch (error) {
     console.error("Get space error:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to fetch space",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch space",
+      error: error.message,
+    });
   }
 });
 
@@ -1285,13 +1280,11 @@ router.put("/spaces/:id", auth, async (req, res) => {
     res.json({ success: true, data: updated });
   } catch (error) {
     console.error("Update space error:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to update space",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Failed to update space",
+      error: error.message,
+    });
   }
 });
 
@@ -1313,13 +1306,11 @@ router.delete("/spaces/:id", auth, async (req, res) => {
     res.json({ success: true, message: "Space deleted" });
   } catch (error) {
     console.error("Delete space error:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to delete space",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete space",
+      error: error.message,
+    });
   }
 });
 
@@ -1342,13 +1333,11 @@ router.get("/spaces/:id/conversations", auth, async (req, res) => {
     res.json({ success: true, data: result });
   } catch (error) {
     console.error("List space conversations error:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to list conversations",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Failed to list conversations",
+      error: error.message,
+    });
   }
 });
 
