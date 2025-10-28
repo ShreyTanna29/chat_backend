@@ -105,6 +105,8 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     res.setHeader("Access-Control-Allow-Headers", "Cache-Control");
     // Important for Nginx/Proxies to avoid buffering SSE
     res.setHeader("X-Accel-Buffering", "no");
+  // Disable compression for SSE on some production setups
+  try { res.setHeader("Content-Encoding", "identity"); } catch (_) {}
     if (typeof res.flushHeaders === "function") res.flushHeaders();
 
     // Send initial connection confirmation immediately
@@ -124,6 +126,13 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
         if (typeof res.flush === "function") res.flush();
       } catch (_) {}
     }, 15000);
+    // Some proxies emit 'aborted' instead of 'close'
+    req.on("aborted", () => {
+      try {
+        clearInterval(heartbeat);
+        console.warn("[STREAM] Request aborted by client");
+      } catch (_) {}
+    });
     req.on("close", () => {
       try {
         clearInterval(heartbeat);
