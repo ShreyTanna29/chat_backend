@@ -67,8 +67,11 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     const prompt = req.body.prompt;
     const imageFile = req.file;
     const conversationId = req.body.conversationId; // Optional: continue existing conversation
-    // Always use gpt-4.1-mini by default
-    let model = "gpt-5-mini";
+    const thinkMode =
+      req.body.thinkMode === "true" || req.body.thinkMode === true; // Optional: use GPT-5 for advanced reasoning
+
+    // Select model based on thinkMode
+    let model = thinkMode ? "gpt-5" : "gpt-4.1-mini";
 
     if (!prompt && !imageFile) {
       return res.status(400).json({
