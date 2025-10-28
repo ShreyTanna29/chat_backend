@@ -68,7 +68,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     const imageFile = req.file;
     const conversationId = req.body.conversationId; // Optional: continue existing conversation
     // Always use gpt-4.1-mini by default
-    let model = "gpt-4.1-mini";
+    let model = "gpt-5-mini";
 
     if (!prompt && !imageFile) {
       return res.status(400).json({
@@ -105,8 +105,10 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     res.setHeader("Access-Control-Allow-Headers", "Cache-Control");
     // Important for Nginx/Proxies to avoid buffering SSE
     res.setHeader("X-Accel-Buffering", "no");
-  // Disable compression for SSE on some production setups
-  try { res.setHeader("Content-Encoding", "identity"); } catch (_) {}
+    // Disable compression for SSE on some production setups
+    try {
+      res.setHeader("Content-Encoding", "identity");
+    } catch (_) {}
     if (typeof res.flushHeaders === "function") res.flushHeaders();
 
     // Send initial connection confirmation immediately
