@@ -15,17 +15,44 @@ datasource db {
 }
 
 model User {
-  id            String   @id @default(cuid())
-  email         String   @unique
+  id            String         @id @default(cuid())
+  email         String         @unique
   password      String
   name          String
   avatar        String?
-  isVerified    Boolean  @default(false)
+  isVerified    Boolean        @default(false)
   refreshToken  String?
-  searchHistory Json[]   @default([])
-  preferences   Json     @default("{\"theme\":\"auto\",\"language\":\"en\"}")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  searchHistory Json[]         @default([])
+  preferences   Json           @default("{\"theme\":\"auto\",\"language\":\"en\"}")
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  conversations Conversation[]
 
   @@map("users")
+}
+
+model Conversation {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String    @default("New Chat")
+  messages  Message[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // "user" or "assistant"
+  content        String       @db.Text
+  metadata       Json?        @default("{}") // For storing model, tokens, images, etc.
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
+  @@map("messages")
 }

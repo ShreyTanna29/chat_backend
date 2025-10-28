@@ -451,6 +451,275 @@ curl -X POST http://localhost:3000/api/chat/voice \
   -F "audio=@/path/to/audio.mp3"
 ```
 
+### Conversation Management
+
+All chat endpoints now support conversation management. You can create conversations, continue existing ones, and manage your chat history.
+
+#### GET /api/chat/conversations
+
+Get all conversations for the authenticated user.
+
+**Headers:**
+
+```
+Authorization: Bearer <access_token>
+```
+
+**Query Parameters:**
+
+- `page` (optional): Page number (default: 1)
+- `limit` (optional): Items per page (default: 20)
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "conversations": [
+      {
+        "id": "conv_123",
+        "userId": "user_456",
+        "title": "Recipe Ideas",
+        "messages": [
+          {
+            "content": "Give me some pasta recipes",
+            "createdAt": "2023-01-01T00:00:00.000Z"
+          }
+        ],
+        "_count": {
+          "messages": 4
+        },
+        "createdAt": "2023-01-01T00:00:00.000Z",
+        "updatedAt": "2023-01-01T00:05:00.000Z"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 10,
+      "pages": 1
+    }
+  }
+}
+```
+
+#### GET /api/chat/conversations/:id
+
+Get a specific conversation with all messages.
+
+**Headers:**
+
+```
+Authorization: Bearer <access_token>
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "conv_123",
+    "userId": "user_456",
+    "title": "Recipe Ideas",
+    "messages": [
+      {
+        "id": "msg_1",
+        "role": "user",
+        "content": "Give me some pasta recipes",
+        "metadata": {},
+        "createdAt": "2023-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "msg_2",
+        "role": "assistant",
+        "content": "Here are 5 delicious pasta recipes...",
+        "metadata": {
+          "model": "gpt-4.1-mini",
+          "tokens": 150
+        },
+        "createdAt": "2023-01-01T00:00:05.000Z"
+      }
+    ],
+    "createdAt": "2023-01-01T00:00:00.000Z",
+    "updatedAt": "2023-01-01T00:05:00.000Z"
+  }
+}
+```
+
+#### POST /api/chat/conversations
+
+Create a new conversation.
+
+**Headers:**
+
+```
+Authorization: Bearer <access_token>
+```
+
+**Request Body:**
+
+```json
+{
+  "title": "My New Chat"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "conv_789",
+    "userId": "user_456",
+    "title": "My New Chat",
+    "messages": [],
+    "createdAt": "2023-01-01T00:00:00.000Z",
+    "updatedAt": "2023-01-01T00:00:00.000Z"
+  }
+}
+```
+
+#### PUT /api/chat/conversations/:id
+
+Update a conversation (e.g., rename title).
+
+**Headers:**
+
+```
+Authorization: Bearer <access_token>
+```
+
+**Request Body:**
+
+```json
+{
+  "title": "Updated Chat Title"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "conv_123",
+    "userId": "user_456",
+    "title": "Updated Chat Title",
+    "messages": [...],
+    "createdAt": "2023-01-01T00:00:00.000Z",
+    "updatedAt": "2023-01-01T00:10:00.000Z"
+  }
+}
+```
+
+#### DELETE /api/chat/conversations/:id
+
+Delete a specific conversation.
+
+**Headers:**
+
+```
+Authorization: Bearer <access_token>
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Conversation deleted successfully"
+}
+```
+
+#### DELETE /api/chat/conversations
+
+Delete all conversations for the user.
+
+**Headers:**
+
+```
+Authorization: Bearer <access_token>
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "All conversations deleted successfully"
+}
+```
+
+#### GET /api/chat/conversations/search
+
+Search conversations by title or content.
+
+**Headers:**
+
+```
+Authorization: Bearer <access_token>
+```
+
+**Query Parameters:**
+
+- `q` (required): Search query
+- `page` (optional): Page number (default: 1)
+- `limit` (optional): Items per page (default: 20)
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "conv_123",
+      "userId": "user_456",
+      "title": "Recipe Ideas",
+      "messages": [...],
+      "_count": {
+        "messages": 4
+      },
+      "createdAt": "2023-01-01T00:00:00.000Z",
+      "updatedAt": "2023-01-01T00:05:00.000Z"
+    }
+  ]
+}
+```
+
+### Using Conversations in Chat Endpoints
+
+All chat endpoints (`/stream`, `/simple`, `/ask`) now support the `conversationId` parameter:
+
+**Example - Continue existing conversation:**
+
+```bash
+curl -X POST http://localhost:3000/api/chat/simple \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "What about vegetarian options?",
+    "conversationId": "conv_123"
+  }'
+```
+
+**Example - Start new conversation:**
+
+```bash
+curl -X POST http://localhost:3000/api/chat/simple \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Tell me about quantum computing"
+  }'
+```
+
+The response will include the `conversationId` which you can use for follow-up messages.
+
 #### WebSocket /api/chat/voice-realtime
 
 **Real-time bidirectional voice chat with AI** using WebSocket and OpenAI's Realtime API. This enables live conversation where the AI responds in real-time as you speak.

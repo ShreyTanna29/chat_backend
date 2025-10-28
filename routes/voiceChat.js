@@ -232,7 +232,10 @@ function extractToken(req) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const tokenFromQuery = url.searchParams.get("token");
   if (tokenFromQuery) {
-    console.log("[VOICE-REALTIME][extractToken] Token from query param:", tokenFromQuery);
+    console.log(
+      "[VOICE-REALTIME][extractToken] Token from query param:",
+      tokenFromQuery
+    );
     return tokenFromQuery;
   }
 
@@ -240,7 +243,10 @@ function extractToken(req) {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {
     const token = authHeader.substring(7);
-    console.log("[VOICE-REALTIME][extractToken] Token from Authorization header:", token);
+    console.log(
+      "[VOICE-REALTIME][extractToken] Token from Authorization header:",
+      token
+    );
     return token;
   }
 
@@ -251,7 +257,10 @@ function extractToken(req) {
     for (const p of protocols) {
       if (p.startsWith("bearer.")) {
         const token = p.substring(7);
-        console.log("[VOICE-REALTIME][extractToken] Token from sec-websocket-protocol:", token);
+        console.log(
+          "[VOICE-REALTIME][extractToken] Token from sec-websocket-protocol:",
+          token
+        );
         return token;
       }
     }
