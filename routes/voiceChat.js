@@ -108,31 +108,72 @@ function initVoiceChat(server) {
     // Forward messages from client to OpenAI
     clientWs.on("message", (data) => {
       try {
+        // Check if data is binary (Buffer) or text
+        if (Buffer.isBuffer(data)) {
+          // Binary data - forward directly to OpenAI
+          console.log(
+            `[VOICE-REALTIME] Forwarding binary data (${data.length} bytes)`
+          );
+          openaiWs.send(data);
+          return;
+        }
+
+        // Try to parse as JSON
         const message = JSON.parse(data.toString());
         console.log(`[VOICE-REALTIME] Client message type: ${message.type}`);
 
-        // Handle different message types
-        if (message.type === "input_audio_buffer.append") {
-          // Forward audio data to OpenAI
-          openaiWs.send(JSON.stringify(message));
-        } else if (message.type === "input_audio_buffer.commit") {
-          // Commit audio buffer
-          openaiWs.send(JSON.stringify(message));
-        } else if (message.type === "conversation.item.create") {
-          // Send text message
-          openaiWs.send(JSON.stringify(message));
-        } else if (message.type === "response.create") {
-          // Request response generation
-          openaiWs.send(JSON.stringify(message));
-        } else if (message.type === "response.cancel") {
-          // Cancel ongoing response
-          openaiWs.send(JSON.stringify(message));
-        } else {
-          // Forward other message types
-          openaiWs.send(JSON.stringify(message));
+        // Log audio data info for debugging
+        if (message.type === "input_audio_buffer.append" && message.audio) {
+          console.log(
+            `[VOICE-REALTIME] Audio data length: ${message.audio.length} chars (base64)`
+          );
+          console.log(
+            `[VOICE-REALTIME] Audio data preview: ${message.audio.substring(
+              0,
+              50
+            )}...`
+          );
+
+          // Validate base64
+          try {
+            const audioBuffer = Buffer.from(message.audio, "base64");
+            console.log(
+              `[VOICE-REALTIME] Decoded audio size: ${audioBuffer.length} bytes`
+            );
+
+            // PCM16 should be even number of bytes (2 bytes per sample)
+            if (audioBuffer.length % 2 !== 0) {
+              console.warn(
+                `[VOICE-REALTIME] WARNING: Audio buffer size is odd - may not be valid PCM16`
+              );
+            }
+          } catch (e) {
+            console.error(
+              `[VOICE-REALTIME] Invalid base64 audio data:`,
+              e.message
+            );
+            clientWs.send(
+              JSON.stringify({
+                type: "error",
+                error: {
+                  message: "Invalid base64 audio data",
+                  details: e.message,
+                },
+              })
+            );
+            return;
+          }
         }
+
+        // Forward all message types to OpenAI
+        // The OpenAI Realtime API will handle all message types appropriately
+        openaiWs.send(JSON.stringify(message));
       } catch (error) {
         console.error("[VOICE-REALTIME] Error handling client message:", error);
+        console.error(
+          "[VOICE-REALTIME] Data preview:",
+          data.toString().substring(0, 200)
+        );
         clientWs.send(
           JSON.stringify({
             type: "error",
@@ -156,6 +197,11 @@ function initVoiceChat(server) {
           message.type === "response.audio_transcript.delta"
         ) {
           // Don't log every audio chunk to avoid spam
+        } else if (message.type === "error") {
+          console.error(
+            `[VOICE-REALTIME] OpenAI Error:`,
+            JSON.stringify(message, null, 2)
+          );
         } else {
           console.log(`[VOICE-REALTIME] OpenAI message type: ${message.type}`);
         }
