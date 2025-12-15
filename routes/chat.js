@@ -119,8 +119,8 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
       req.body.thinkMode === "true" || req.body.thinkMode === true; // Optional: use GPT-5 for advanced reasoning
     const spaceId = req.body.spaceId || null; // Optional: run within a Space
 
-    // Select model based on thinkMode
-    let model = thinkMode ? "gpt-5-search-api" : "gpt-4.1-mini";
+    // Always use GPT-5 with search capabilities for real-time data
+    let model = "gpt-5-search-api";
 
     if (!prompt && !imageFile) {
       return res.status(400).json({
@@ -251,137 +251,93 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     }
 
     try {
-      if (thinkMode && model === "gpt-5-search-api") {
-        // Preflight: allow function-calling to request web_search
-        let workingMessages = [...messages];
-        const preflight = await openai.chat.completions.create({
-          model,
-          messages: workingMessages,
+      // Always enable web search for real-time data
+      let workingMessages = [...messages];
+      const preflight = await openai.chat.completions.create({
+        model,
+        messages: workingMessages,
+      });
+
+      const preMsg = preflight.choices?.[0]?.message;
+      const toolCalls = preMsg?.tool_calls || [];
+
+      if (toolCalls.length > 0) {
+        // Include assistant tool_calls message
+        workingMessages.push({
+          role: "assistant",
+          content: preMsg.content || null,
+          tool_calls: toolCalls,
         });
 
-        const preMsg = preflight.choices?.[0]?.message;
-        const toolCalls = preMsg?.tool_calls || [];
-
-        if (toolCalls.length > 0) {
-          // Include assistant tool_calls message
-          workingMessages.push({
-            role: "assistant",
-            content: preMsg.content || null,
-            tool_calls: toolCalls,
-          });
-
-          // Execute tool calls
-          for (const call of toolCalls) {
-            if (
-              call.type === "function" &&
-              call.function?.name === "web_search"
-            ) {
-              let args = {};
-              try {
-                args = JSON.parse(call.function.arguments || "{}");
-              } catch (_) {}
-              const query = args.query || userMessageContent;
-              const result = await performWebSearch(query);
-              workingMessages.push({
-                role: "tool",
-                tool_call_id: call.id,
-                content: result,
-              });
-            }
+        // Execute tool calls
+        for (const call of toolCalls) {
+          if (
+            call.type === "function" &&
+            call.function?.name === "web_search"
+          ) {
+            let args = {};
+            try {
+              args = JSON.parse(call.function.arguments || "{}");
+            } catch (_) {}
+            const query = args.query || userMessageContent;
+            const result = await performWebSearch(query);
+            workingMessages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: result,
+            });
           }
+        }
 
-          // Stream final answer; prevent further tool calls to avoid loops
-          const stream = await openai.chat.completions.create({
-            model,
-            messages: workingMessages,
-            stream: true,
-            tool_choice: "none",
-          });
+        // Stream final answer; prevent further tool calls to avoid loops
+        const stream = await openai.chat.completions.create({
+          model,
+          messages: workingMessages,
+          stream: true,
+          tool_choice: "none",
+        });
 
-          // use outer fullResponse accumulator
-          console.log(
-            `[STREAM] Starting stream with model: ${model} (thinkMode + web_search)`
-          );
-          for await (const chunk of stream) {
-            const content = chunk.choices[0]?.delta?.content || "";
-            if (content) {
-              fullResponse += content;
-              res.write(
-                `data: ${JSON.stringify({
-                  type: "chunk",
-                  content: content,
-                  timestamp: new Date().toISOString(),
-                })}\n\n`
-              );
-              if (typeof res.flush === "function") res.flush();
-            }
-            if (chunk.choices[0]?.finish_reason) {
-              console.log(
-                `[STREAM] Response received from ${model} - Length: ${fullResponse.length} chars, Finish reason: ${chunk.choices[0].finish_reason}`
-              );
-              res.write(
-                `data: ${JSON.stringify({
-                  type: "done",
-                  finish_reason: chunk.choices[0].finish_reason,
-                  full_response: fullResponse,
-                  timestamp: new Date().toISOString(),
-                })}\n\n`
-              );
-              if (typeof res.flush === "function") res.flush();
-              break;
-            }
+        console.log(
+          `[STREAM] Starting stream with model: ${model} (with web search)`
+        );
+        for await (const chunk of stream) {
+          const content = chunk.choices[0]?.delta?.content || "";
+          if (content) {
+            fullResponse += content;
+            res.write(
+              `data: ${JSON.stringify({
+                type: "chunk",
+                content: content,
+                timestamp: new Date().toISOString(),
+              })}\n\n`
+            );
+            if (typeof res.flush === "function") res.flush();
           }
-        } else {
-          // No tool calls requested; stream normally
-          const stream = await openai.chat.completions.create({
-            model,
-            messages,
-            stream: true,
-          });
-
-          // use outer fullResponse accumulator
-          console.log(`[STREAM] Starting stream with model: ${model}`);
-          for await (const chunk of stream) {
-            const content = chunk.choices[0]?.delta?.content || "";
-            if (content) {
-              fullResponse += content;
-              res.write(
-                `data: ${JSON.stringify({
-                  type: "chunk",
-                  content: content,
-                  timestamp: new Date().toISOString(),
-                })}\n\n`
-              );
-              if (typeof res.flush === "function") res.flush();
-            }
-            if (chunk.choices[0]?.finish_reason) {
-              console.log(
-                `[STREAM] Response received from ${model} - Length: ${fullResponse.length} chars, Finish reason: ${chunk.choices[0].finish_reason}`
-              );
-              res.write(
-                `data: ${JSON.stringify({
-                  type: "done",
-                  finish_reason: chunk.choices[0].finish_reason,
-                  full_response: fullResponse,
-                  timestamp: new Date().toISOString(),
-                })}\n\n`
-              );
-              if (typeof res.flush === "function") res.flush();
-              break;
-            }
+          if (chunk.choices[0]?.finish_reason) {
+            console.log(
+              `[STREAM] Response received from ${model} - Length: ${fullResponse.length} chars, Finish reason: ${chunk.choices[0].finish_reason}`
+            );
+            res.write(
+              `data: ${JSON.stringify({
+                type: "done",
+                finish_reason: chunk.choices[0].finish_reason,
+                full_response: fullResponse,
+                timestamp: new Date().toISOString(),
+              })}\n\n`
+            );
+            if (typeof res.flush === "function") res.flush();
+            break;
           }
         }
       } else {
-        // Original streaming path (no think mode)
+        // No tool calls requested; stream normally
         const stream = await openai.chat.completions.create({
           model,
           messages,
           stream: true,
         });
 
-        // use outer fullResponse accumulator
         console.log(`[STREAM] Starting stream with model: ${model}`);
-
         for await (const chunk of stream) {
           const content = chunk.choices[0]?.delta?.content || "";
           if (content) {
