@@ -91,7 +91,6 @@ function initVoiceChat(server) {
               silence_duration_ms: 500,
             },
             temperature: 0.8,
-            max_response_output_tokens: 4096,
           },
         })
       );
@@ -131,16 +130,16 @@ function initVoiceChat(server) {
 
           try {
             // Convert 3GP/AAC audio to PCM16 WAV at 24kHz
-            console.log('[VOICE-REALTIME] Converting 3GP audio to PCM16...');
+            console.log("[VOICE-REALTIME] Converting 3GP audio to PCM16...");
             const pcm16Audio = await convertBase64ToPCM16(message.audio);
-            
+
             // Replace the audio data with converted PCM16
             message.audio = pcm16Audio;
-            
+
             console.log(
               `[VOICE-REALTIME] Converted audio length: ${pcm16Audio.length} chars (base64)`
             );
-            
+
             // Validate converted audio
             const audioBuffer = Buffer.from(pcm16Audio, "base64");
             console.log(
