@@ -1,5 +1,6 @@
 const WebSocket = require("ws");
 const jwt = require("jsonwebtoken");
+const { convertBase64ToPCM16 } = require("../utils/audioConverter");
 
 /**
  * Real-time Voice Chat WebSocket Handler
@@ -106,7 +107,7 @@ function initVoiceChat(server) {
     });
 
     // Forward messages from client to OpenAI
-    clientWs.on("message", (data) => {
+    clientWs.on("message", async (data) => {
       try {
         // Check if data is binary (Buffer) or text
         if (Buffer.isBuffer(data)) {
@@ -122,23 +123,28 @@ function initVoiceChat(server) {
         const message = JSON.parse(data.toString());
         console.log(`[VOICE-REALTIME] Client message type: ${message.type}`);
 
-        // Log audio data info for debugging
+        // Handle audio data - convert from 3GP to PCM16
         if (message.type === "input_audio_buffer.append" && message.audio) {
           console.log(
-            `[VOICE-REALTIME] Audio data length: ${message.audio.length} chars (base64)`
-          );
-          console.log(
-            `[VOICE-REALTIME] Audio data preview: ${message.audio.substring(
-              0,
-              50
-            )}...`
+            `[VOICE-REALTIME] Received 3GP audio data length: ${message.audio.length} chars (base64)`
           );
 
-          // Validate base64
           try {
-            const audioBuffer = Buffer.from(message.audio, "base64");
+            // Convert 3GP/AAC audio to PCM16 WAV at 24kHz
+            console.log('[VOICE-REALTIME] Converting 3GP audio to PCM16...');
+            const pcm16Audio = await convertBase64ToPCM16(message.audio);
+            
+            // Replace the audio data with converted PCM16
+            message.audio = pcm16Audio;
+            
             console.log(
-              `[VOICE-REALTIME] Decoded audio size: ${audioBuffer.length} bytes`
+              `[VOICE-REALTIME] Converted audio length: ${pcm16Audio.length} chars (base64)`
+            );
+            
+            // Validate converted audio
+            const audioBuffer = Buffer.from(pcm16Audio, "base64");
+            console.log(
+              `[VOICE-REALTIME] Converted PCM16 size: ${audioBuffer.length} bytes`
             );
 
             // PCM16 should be even number of bytes (2 bytes per sample)
@@ -149,14 +155,14 @@ function initVoiceChat(server) {
             }
           } catch (e) {
             console.error(
-              `[VOICE-REALTIME] Invalid base64 audio data:`,
+              `[VOICE-REALTIME] Audio conversion error:`,
               e.message
             );
             clientWs.send(
               JSON.stringify({
                 type: "error",
                 error: {
-                  message: "Invalid base64 audio data",
+                  message: "Audio conversion failed",
                   details: e.message,
                 },
               })
