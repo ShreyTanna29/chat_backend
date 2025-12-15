@@ -6,6 +6,7 @@ const Conversation = require("../models/Conversation");
 const Space = require("../models/Space");
 const { body, validationResult } = require("express-validator");
 const multer = require("multer");
+const { convertToPCM16 } = require("../utils/audioConverter");
 
 const router = express.Router();
 
@@ -1336,6 +1337,90 @@ router.get("/spaces/:id/conversations", auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to list conversations",
+      error: error.message,
+    });
+  }
+});
+
+// @route   POST /api/chat/upload-audio
+// @desc    Upload and convert audio file from 3GP/M4A to PCM16 WAV
+// @access  Private
+router.post("/upload-audio", auth, upload.single("audio"), async (req, res) => {
+  try {
+    console.log("[UPLOAD-AUDIO] Received audio upload request");
+
+    // Check if audio file was provided
+    if (!req.file) {
+      console.log("[UPLOAD-AUDIO] No audio file provided");
+      return res.status(400).json({
+        success: false,
+        message: "Audio file is required",
+      });
+    }
+
+    const audioFile = req.file;
+    console.log(`[UPLOAD-AUDIO] File details:`, {
+      originalname: audioFile.originalname,
+      mimetype: audioFile.mimetype,
+      size: audioFile.size,
+    });
+
+    // Validate file type (3GP or M4A)
+    const allowedMimeTypes = [
+      "audio/3gpp",
+      "audio/3gp",
+      "audio/m4a",
+      "audio/mp4",
+      "audio/aac",
+      "video/3gpp",
+    ];
+
+    const fileExtension = audioFile.originalname.toLowerCase().split(".").pop();
+    const allowedExtensions = ["3gp", "m4a", "aac", "mp4"];
+
+    if (
+      !allowedMimeTypes.includes(audioFile.mimetype) &&
+      !allowedExtensions.includes(fileExtension)
+    ) {
+      console.log(
+        `[UPLOAD-AUDIO] Invalid file type: ${audioFile.mimetype}, extension: ${fileExtension}`
+      );
+      return res.status(400).json({
+        success: false,
+        message: "Invalid audio format. Only 3GP and M4A files are supported.",
+      });
+    }
+
+    console.log("[UPLOAD-AUDIO] Converting audio to PCM16...");
+
+    // Convert audio buffer to PCM16 WAV
+    const pcm16Buffer = await convertToPCM16(audioFile.buffer);
+
+    console.log(
+      `[UPLOAD-AUDIO] Conversion successful. PCM16 size: ${pcm16Buffer.length} bytes`
+    );
+
+    // Encode to base64 for JSON response
+    const pcm16Audio = pcm16Buffer.toString("base64");
+
+    // Return the converted audio
+    res.json({
+      success: true,
+      message: "Audio converted successfully",
+      data: {
+        pcm16Audio: pcm16Audio,
+        originalSize: audioFile.size,
+        convertedSize: pcm16Buffer.length,
+        format: "PCM16 WAV (24kHz, 16-bit, mono)",
+      },
+    });
+
+    console.log("[UPLOAD-AUDIO] Response sent successfully");
+  } catch (error) {
+    console.error("[UPLOAD-AUDIO] Error processing audio:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to process audio file",
       error: error.message,
     });
   }
