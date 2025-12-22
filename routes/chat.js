@@ -111,6 +111,12 @@ const chatValidation = [
 // @desc    Stream chat response from GPT-5 (uses gpt-5-mini for image input)
 // @access  Private
 router.post("/stream", auth, upload.single("image"), async (req, res) => {
+  const requestStartTime = Date.now();
+  console.log("\n========== [STREAM] New Request Started ==========");
+  console.log("[STREAM] Timestamp:", new Date().toISOString());
+  console.log("[STREAM] User ID:", req.user?.id);
+  console.log("[STREAM] User Email:", req.user?.email);
+
   try {
     const prompt = req.body.prompt;
     const imageFile = req.file;
@@ -119,10 +125,32 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
       req.body.thinkMode === "true" || req.body.thinkMode === true; // Optional: use GPT-5 for advanced reasoning
     const spaceId = req.body.spaceId || null; // Optional: run within a Space
 
+    console.log("[STREAM] Request Parameters:");
+    console.log("  - Prompt length:", prompt ? prompt.length : 0, "characters");
+    console.log(
+      "  - Prompt preview:",
+      prompt
+        ? prompt.substring(0, 100) + (prompt.length > 100 ? "..." : "")
+        : "N/A"
+    );
+    console.log("  - Has image:", !!imageFile);
+    if (imageFile) {
+      console.log("  - Image details:", {
+        mimetype: imageFile.mimetype,
+        size: imageFile.size,
+        originalname: imageFile.originalname,
+      });
+    }
+    console.log("  - Conversation ID:", conversationId || "New conversation");
+    console.log("  - Think Mode:", thinkMode);
+    console.log("  - Space ID:", spaceId || "None");
+
     // Always use GPT-5 with search capabilities for real-time data
     let model = "gpt-5-search-api";
+    console.log("[STREAM] Model selected:", model);
 
     if (!prompt && !imageFile) {
+      console.log("[STREAM] ❌ Validation failed: No prompt or image provided");
       return res.status(400).json({
         success: false,
         message: "Prompt or image is required",
@@ -130,27 +158,40 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     }
 
     // Get or create conversation
+    console.log("[STREAM] Getting/creating conversation...");
     let conversation;
     if (conversationId) {
+      console.log("[STREAM] Loading existing conversation:", conversationId);
       conversation = await Conversation.findById(conversationId, {
         includeMessages: true,
       });
       if (!conversation || conversation.userId !== req.user.id) {
+        console.log(
+          "[STREAM] ❌ Conversation not found or access denied:",
+          conversationId
+        );
         return res.status(404).json({
           success: false,
           message: "Conversation not found",
         });
       }
+      console.log(
+        "[STREAM] ✓ Conversation loaded. Message count:",
+        conversation.messages?.length || 0
+      );
     } else {
+      console.log("[STREAM] Creating new conversation...");
       // Create new conversation
       conversation = await Conversation.create({
         userId: req.user.id,
         title: "New Chat",
         spaceId: spaceId || undefined,
       });
+      console.log("[STREAM] ✓ New conversation created. ID:", conversation.id);
     }
 
     // Prepare Server-Sent Events response upfront so the client gets an immediate connection
+    console.log("[STREAM] Setting up SSE headers...");
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
@@ -161,6 +202,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     // Disable compression for SSE on some production setups
     // Accumulate assistant output across the stream
     let fullResponse = "";
+    console.log("[STREAM] ✓ SSE headers configured");
 
     try {
       res.setHeader("Content-Encoding", "identity");
@@ -168,6 +210,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     if (typeof res.flushHeaders === "function") res.flushHeaders();
 
     // Send initial connection confirmation immediately
+    console.log("[STREAM] Sending 'connected' event to client");
     res.write(
       `data: ${JSON.stringify({
         type: "connected",
@@ -176,6 +219,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
       })}\n\n`
     );
     if (typeof res.flush === "function") res.flush();
+    console.log("[STREAM] ✓ Connection established with client");
 
     // Heartbeat to keep proxies from closing idle connections
     const heartbeat = setInterval(() => {
@@ -200,18 +244,24 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     // Load space (if provided) and build system prompts
     let space = null;
     if (spaceId) {
+      console.log("[STREAM] Loading space:", spaceId);
       space = await Space.findById(spaceId);
       if (!space || space.userId !== req.user.id) {
+        console.log("[STREAM] ❌ Space not found or access denied:", spaceId);
         return res
           .status(403)
           .json({ success: false, message: "Access denied to space" });
       }
+      console.log("[STREAM] ✓ Space loaded:", space.name);
+      console.log("[STREAM] Space has default prompt:", !!space.defaultPrompt);
     }
 
     // Build messages array with conversation history
+    console.log("[STREAM] Building messages array...");
     const messages = [];
     if (space?.defaultPrompt) {
       messages.push({ role: "system", content: space.defaultPrompt });
+      console.log("[STREAM] Added space default prompt");
     }
     messages.push({
       role: "system",
@@ -219,20 +269,30 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
         ? "You are a helpful AI assistant with web search capabilities. Use web search to find current, accurate information when needed. If an image is provided, analyze it and answer the user's question based on both the image and the prompt."
         : "You are a helpful AI assistant. If an image is provided, analyze it and answer the user's question based on both the image and the prompt.",
     });
+    console.log("[STREAM] Added system prompt (Think mode:", thinkMode + ")");
 
     // Add conversation history if exists
     if (conversation.messages && conversation.messages.length > 0) {
+      console.log(
+        "[STREAM] Adding conversation history:",
+        conversation.messages.length,
+        "messages"
+      );
       conversation.messages.forEach((msg) => {
         messages.push({
           role: msg.role,
           content: msg.content,
         });
       });
+    } else {
+      console.log("[STREAM] No conversation history to add");
     }
 
     // Add current user message
     const userMessageContent = prompt || "What is in this image?";
+    console.log("[STREAM] Adding current user message...");
     if (imageFile) {
+      console.log("[STREAM] Encoding image to base64...");
       const base64Image = imageFile.buffer.toString("base64");
       messages.push({
         role: "user",
@@ -246,22 +306,34 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
           },
         ],
       });
+      console.log(
+        "[STREAM] ✓ User message with image added. Base64 length:",
+        base64Image.length
+      );
     } else {
       messages.push({ role: "user", content: userMessageContent });
+      console.log("[STREAM] ✓ Text-only user message added");
     }
+    console.log("[STREAM] Total messages in context:", messages.length);
 
     try {
       // Always enable web search for real-time data
+      console.log(
+        "[STREAM] Creating preflight request to check for tool calls..."
+      );
       let workingMessages = [...messages];
       const preflight = await openai.chat.completions.create({
         model,
         messages: workingMessages,
       });
+      console.log("[STREAM] ✓ Preflight response received");
 
       const preMsg = preflight.choices?.[0]?.message;
       const toolCalls = preMsg?.tool_calls || [];
+      console.log("[STREAM] Tool calls detected:", toolCalls.length);
 
       if (toolCalls.length > 0) {
+        console.log("[STREAM] Processing", toolCalls.length, "tool call(s)...");
         // Include assistant tool_calls message
         workingMessages.push({
           role: "assistant",
@@ -271,6 +343,12 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
 
         // Execute tool calls
         for (const call of toolCalls) {
+          console.log(
+            "[STREAM] Executing tool call:",
+            call.function?.name,
+            "(ID:",
+            call.id + ")"
+          );
           if (
             call.type === "function" &&
             call.function?.name === "web_search"
@@ -280,7 +358,16 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
               args = JSON.parse(call.function.arguments || "{}");
             } catch (_) {}
             const query = args.query || userMessageContent;
+            console.log("[STREAM] Web search query:", query);
+            const searchStartTime = Date.now();
             const result = await performWebSearch(query);
+            const searchDuration = Date.now() - searchStartTime;
+            console.log(
+              "[STREAM] ✓ Web search completed in",
+              searchDuration,
+              "ms. Result length:",
+              result.length
+            );
             workingMessages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -288,8 +375,10 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
             });
           }
         }
+        console.log("[STREAM] ✓ All tool calls executed");
 
         // Stream final answer; prevent further tool calls to avoid loops
+        console.log("[STREAM] Creating streaming request with tool results...");
         const stream = await openai.chat.completions.create({
           model,
           messages: workingMessages,
@@ -300,9 +389,12 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
         console.log(
           `[STREAM] Starting stream with model: ${model} (with web search)`
         );
+        let chunkCount = 0;
+        const streamStartTime = Date.now();
         for await (const chunk of stream) {
           const content = chunk.choices[0]?.delta?.content || "";
           if (content) {
+            chunkCount++;
             fullResponse += content;
             res.write(
               `data: ${JSON.stringify({
@@ -312,11 +404,22 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
               })}\n\n`
             );
             if (typeof res.flush === "function") res.flush();
+
+            // Log every 50 chunks to avoid log spam
+            if (chunkCount % 50 === 0) {
+              console.log(
+                `[STREAM] Streaming progress: ${chunkCount} chunks, ${fullResponse.length} chars`
+              );
+            }
           }
           if (chunk.choices[0]?.finish_reason) {
-            console.log(
-              `[STREAM] Response received from ${model} - Length: ${fullResponse.length} chars, Finish reason: ${chunk.choices[0].finish_reason}`
-            );
+            const streamDuration = Date.now() - streamStartTime;
+            console.log(`[STREAM] ✓ Stream completed from ${model}`);
+            console.log(`[STREAM] Stream statistics:`);
+            console.log(`  - Total chunks: ${chunkCount}`);
+            console.log(`  - Response length: ${fullResponse.length} chars`);
+            console.log(`  - Stream duration: ${streamDuration}ms`);
+            console.log(`  - Finish reason: ${chunk.choices[0].finish_reason}`);
             res.write(
               `data: ${JSON.stringify({
                 type: "done",
@@ -331,6 +434,9 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
         }
       } else {
         // No tool calls requested; stream normally
+        console.log(
+          "[STREAM] No tool calls needed. Creating direct streaming request..."
+        );
         const stream = await openai.chat.completions.create({
           model,
           messages,
@@ -338,9 +444,12 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
         });
 
         console.log(`[STREAM] Starting stream with model: ${model}`);
+        let chunkCount = 0;
+        const streamStartTime = Date.now();
         for await (const chunk of stream) {
           const content = chunk.choices[0]?.delta?.content || "";
           if (content) {
+            chunkCount++;
             fullResponse += content;
             res.write(
               `data: ${JSON.stringify({
@@ -350,11 +459,22 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
               })}\n\n`
             );
             if (typeof res.flush === "function") res.flush();
+
+            // Log every 50 chunks to avoid log spam
+            if (chunkCount % 50 === 0) {
+              console.log(
+                `[STREAM] Streaming progress: ${chunkCount} chunks, ${fullResponse.length} chars`
+              );
+            }
           }
           if (chunk.choices[0]?.finish_reason) {
-            console.log(
-              `[STREAM] Response received from ${model} - Length: ${fullResponse.length} chars, Finish reason: ${chunk.choices[0].finish_reason}`
-            );
+            const streamDuration = Date.now() - streamStartTime;
+            console.log(`[STREAM] ✓ Stream completed from ${model}`);
+            console.log(`[STREAM] Stream statistics:`);
+            console.log(`  - Total chunks: ${chunkCount}`);
+            console.log(`  - Response length: ${fullResponse.length} chars`);
+            console.log(`  - Stream duration: ${streamDuration}ms`);
+            console.log(`  - Finish reason: ${chunk.choices[0].finish_reason}`);
             res.write(
               `data: ${JSON.stringify({
                 type: "done",
@@ -370,8 +490,10 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
       }
 
       // Save messages to database
+      console.log("[STREAM] Saving messages to database...");
       try {
         // Save user message
+        console.log("[STREAM] Saving user message...");
         await Conversation.addMessage(conversation.id, {
           role: "user",
           content: userMessageContent,
@@ -380,8 +502,10 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
             imageType: imageFile?.mimetype,
           },
         });
+        console.log("[STREAM] ✓ User message saved");
 
         // Save assistant response
+        console.log("[STREAM] Saving assistant response...");
         await Conversation.addMessage(conversation.id, {
           role: "assistant",
           content: fullResponse,
@@ -390,22 +514,46 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
             responseLength: fullResponse.length,
           },
         });
+        console.log("[STREAM] ✓ Assistant response saved");
 
         // Auto-generate title if this is the first message
         if (!conversationId) {
+          console.log("[STREAM] Auto-generating conversation title...");
           await Conversation.autoGenerateTitle(conversation.id);
+          console.log("[STREAM] ✓ Conversation title generated");
         }
+        console.log(
+          "[STREAM] ✓ All database operations completed successfully"
+        );
       } catch (dbError) {
-        console.error("[STREAM] Error saving to database:", dbError);
+        console.error("[STREAM] ❌ Error saving to database:", dbError);
+        console.error("[STREAM] Database error details:", {
+          message: dbError.message,
+          stack: dbError.stack,
+        });
         // Don't fail the request if DB save fails
       }
 
       // Save to user's search history
       try {
+        console.log("[STREAM] Saving to user search history...");
         await User.addToSearchHistory(req.user.id, prompt || "[image]");
-      } catch (historyError) {}
+        console.log("[STREAM] ✓ Search history updated");
+      } catch (historyError) {
+        console.error(
+          "[STREAM] ⚠️ Failed to save search history:",
+          historyError.message
+        );
+      }
     } catch (openaiError) {
       // We already opened the SSE stream; emit an error event and close
+      console.error("[STREAM] ❌ OpenAI API Error:", {
+        message: openaiError.message,
+        status: openaiError.status,
+        code: openaiError.code,
+        type: openaiError.type,
+      });
+      console.error("[STREAM] OpenAI error stack:", openaiError.stack);
       res.write(
         `data: ${JSON.stringify({
           type: "error",
@@ -417,17 +565,36 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
       if (typeof res.flush === "function") res.flush();
     }
     clearInterval(heartbeat);
+    const totalDuration = Date.now() - requestStartTime;
+    console.log("[STREAM] Closing stream connection");
+    console.log("[STREAM] Total request duration:", totalDuration, "ms");
+    console.log(
+      "[STREAM] Final response length:",
+      fullResponse.length,
+      "characters"
+    );
     res.write(`data: ${JSON.stringify({ type: "close" })}\n\n`);
     if (typeof res.flush === "function") res.flush();
     res.end();
+    console.log("========== [STREAM] Request Completed ==========\n");
   } catch (error) {
+    const totalDuration = Date.now() - requestStartTime;
+    console.error("[STREAM] ❌ Unexpected Error:", {
+      message: error.message,
+      stack: error.stack,
+      duration: totalDuration + "ms",
+    });
+
     if (!res.headersSent) {
+      console.log("[STREAM] Sending error response (headers not sent yet)");
+      console.log("========== [STREAM] Request Failed ==========\n");
       return res.status(500).json({
         success: false,
         message: "Internal server error",
         error: error.message,
       });
     }
+    console.log("[STREAM] Sending error event through stream");
     res.write(
       `data: ${JSON.stringify({
         type: "error",
@@ -441,6 +608,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
       clearInterval(heartbeat);
     } catch (_) {}
     res.end();
+    console.log("========== [STREAM] Request Failed ==========\n");
   }
 });
 
