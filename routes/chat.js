@@ -50,9 +50,11 @@ function toAIErrorResponse(err, fallbackMessage = "AI service error") {
 
 // Perform web search via Tavily if configured; otherwise return a helpful message
 async function performWebSearch(query) {
+  console.log("[WEB_SEARCH] Starting web search for query:", query);
   try {
     const apiKey = process.env.TAVILY_API_KEY;
     if (!apiKey) {
+      console.error("[WEB_SEARCH] ❌ TAVILY_API_KEY not configured!");
       return JSON.stringify({
         error: "Web search not configured",
         hint: "Set TAVILY_API_KEY in environment to enable web search",
@@ -60,6 +62,7 @@ async function performWebSearch(query) {
       });
     }
 
+    console.log("[WEB_SEARCH] Making request to Tavily API...");
     const resp = await fetch("https://api.tavily.com/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -72,7 +75,29 @@ async function performWebSearch(query) {
       }),
     });
 
+    if (!resp.ok) {
+      console.error(
+        "[WEB_SEARCH] ❌ Tavily API error:",
+        resp.status,
+        resp.statusText
+      );
+      const errorText = await resp.text();
+      console.error("[WEB_SEARCH] Error response:", errorText);
+      return JSON.stringify({
+        error: "Search API error",
+        status: resp.status,
+        message: errorText,
+        query,
+      });
+    }
+
     const data = await resp.json();
+    console.log(
+      "[WEB_SEARCH] ✓ Received",
+      data.results?.length || 0,
+      "results"
+    );
+
     // Normalize output for the model
     const normalized = {
       answer: data.answer,
@@ -82,8 +107,11 @@ async function performWebSearch(query) {
         content: r.content,
       })),
     };
+    console.log("[WEB_SEARCH] ✓ Search completed successfully");
     return JSON.stringify(normalized);
   } catch (err) {
+    console.error("[WEB_SEARCH] ❌ Exception:", err.message);
+    console.error("[WEB_SEARCH] Error stack:", err.stack);
     return JSON.stringify({
       error: "Search failed",
       message: err.message,
@@ -265,11 +293,10 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     }
     messages.push({
       role: "system",
-      content: thinkMode
-        ? "You are a helpful AI assistant with web search capabilities. Use web search to find current, accurate information when needed. If an image is provided, analyze it and answer the user's question based on both the image and the prompt."
-        : "You are a helpful AI assistant. If an image is provided, analyze it and answer the user's question based on both the image and the prompt.",
+      content:
+        "You are a helpful AI assistant with web search capabilities. IMPORTANT: When the user asks about current events, news, today's information, real-time data, recent updates, or anything that requires up-to-date information, you MUST use the web_search function to get accurate, current information. Always prefer using web search for questions about 'today', 'now', 'current', 'latest', 'recent', or 'what's happening'. If an image is provided, analyze it and answer the user's question based on both the image and the prompt.",
     });
-    console.log("[STREAM] Added system prompt (Think mode:", thinkMode + ")");
+    console.log("[STREAM] Added system prompt with web search instructions");
 
     // Add conversation history if exists
     if (conversation.messages && conversation.messages.length > 0) {
@@ -324,14 +351,14 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
           function: {
             name: "web_search",
             description:
-              "Search the web for current information, news, facts, or any real-time data. Use this when you need up-to-date information that you don't have in your training data.",
+              "Search the web for current information, news, facts, or any real-time data. Use this when the user asks about current events, today's news, recent updates, or anything requiring up-to-date information beyond your training data cutoff.",
             parameters: {
               type: "object",
               properties: {
                 query: {
                   type: "string",
                   description:
-                    "The search query to find information on the web",
+                    "The search query to find information on the web. Be specific and include relevant keywords.",
                 },
               },
               required: ["query"],
@@ -339,6 +366,17 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
           },
         },
       ];
+
+      // Check if the query likely needs real-time data
+      const needsRealTimeData =
+        /\b(today|now|current|latest|recent|news|happening|2024|2025|this (week|month|year))\b/i.test(
+          userMessageContent
+        );
+      console.log("[STREAM] Query needs real-time data:", needsRealTimeData);
+
+      // Determine tool choice based on query content
+      const toolChoice = needsRealTimeData ? "required" : "auto";
+      console.log("[STREAM] Tool choice strategy:", toolChoice);
 
       // Always enable web search for real-time data
       console.log(
@@ -349,7 +387,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
         model,
         messages: workingMessages,
         tools: tools,
-        tool_choice: "auto",
+        tool_choice: toolChoice,
       });
       console.log("[STREAM] ✓ Preflight response received");
 
@@ -393,14 +431,31 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
               "ms. Result length:",
               result.length
             );
+            // Log search result preview
+            try {
+              const resultObj = JSON.parse(result);
+              console.log("[STREAM] Search result preview:", {
+                hasAnswer: !!resultObj.answer,
+                answerPreview: resultObj.answer?.substring(0, 100),
+                resultsCount: resultObj.results?.length || 0,
+                hasError: !!resultObj.error,
+              });
+            } catch (e) {
+              console.log("[STREAM] Could not parse search result for preview");
+            }
             workingMessages.push({
               role: "tool",
               tool_call_id: call.id,
               content: result,
             });
+            console.log("[STREAM] ✓ Tool result added to messages");
           }
         }
         console.log("[STREAM] ✓ All tool calls executed");
+        console.log(
+          "[STREAM] Total messages before final response:",
+          workingMessages.length
+        );
 
         // Stream final answer; prevent further tool calls to avoid loops
         console.log("[STREAM] Creating streaming request with tool results...");
