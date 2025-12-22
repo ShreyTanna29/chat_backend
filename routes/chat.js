@@ -145,8 +145,8 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     console.log("  - Think Mode:", thinkMode);
     console.log("  - Space ID:", spaceId || "None");
 
-    // Always use GPT-5 with search capabilities for real-time data
-    let model = "gpt-5-search-api";
+    // Use GPT-4o-mini for better rate limits with function calling for web search
+    let model = "gpt-4o-mini";
     console.log("[STREAM] Model selected:", model);
 
     if (!prompt && !imageFile) {
@@ -317,6 +317,29 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     console.log("[STREAM] Total messages in context:", messages.length);
 
     try {
+      // Define web search tool for function calling
+      const tools = [
+        {
+          type: "function",
+          function: {
+            name: "web_search",
+            description:
+              "Search the web for current information, news, facts, or any real-time data. Use this when you need up-to-date information that you don't have in your training data.",
+            parameters: {
+              type: "object",
+              properties: {
+                query: {
+                  type: "string",
+                  description:
+                    "The search query to find information on the web",
+                },
+              },
+              required: ["query"],
+            },
+          },
+        },
+      ];
+
       // Always enable web search for real-time data
       console.log(
         "[STREAM] Creating preflight request to check for tool calls..."
@@ -325,6 +348,8 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
       const preflight = await openai.chat.completions.create({
         model,
         messages: workingMessages,
+        tools: tools,
+        tool_choice: "auto",
       });
       console.log("[STREAM] ✓ Preflight response received");
 
@@ -383,6 +408,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
           model,
           messages: workingMessages,
           stream: true,
+          tools: tools,
           tool_choice: "none",
         });
 
@@ -441,6 +467,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
           model,
           messages,
           stream: true,
+          tools: tools,
         });
 
         console.log(`[STREAM] Starting stream with model: ${model}`);
