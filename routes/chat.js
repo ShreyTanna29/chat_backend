@@ -698,17 +698,15 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
               ) {
                 generatedImages.push({
                   url: resultObj.image_url,
-                  b64_json: resultObj.b64_json,
                   revised_prompt: resultObj.revised_prompt,
                 });
                 console.log("[STREAM] ✓ Image added to generated images list");
 
-                // Send image event to client immediately
+                // Send image event to client immediately (without b64_json)
                 res.write(
                   `data: ${JSON.stringify({
                     type: "image",
                     image_url: resultObj.image_url,
-                    b64_json: resultObj.b64_json,
                     revised_prompt: resultObj.revised_prompt,
                     timestamp: new Date().toISOString(),
                   })}\n\n`
