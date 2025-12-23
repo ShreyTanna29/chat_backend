@@ -125,6 +125,58 @@ async function performWebSearch(query) {
   }
 }
 
+// Perform image generation via DALL-E
+async function performImageGeneration(
+  prompt,
+  size = "1024x1024",
+  quality = "standard"
+) {
+  console.log("[IMAGE_GEN] Starting image generation for prompt:", prompt);
+  try {
+    console.log("[IMAGE_GEN] Making request to DALL-E API...");
+    const response = await openai.images.generate({
+      model: "gpt-image-1",
+      prompt: prompt,
+      n: 1,
+      size: size,
+      quality: quality,
+    });
+
+    const imageData = response.data[0];
+    console.log("[IMAGE_GEN] ✓ Image generated successfully");
+
+    // Return the image URL or base64 data
+    const result = {
+      success: true,
+      image_url: imageData.url || null,
+      b64_json: imageData.b64_json || null,
+      revised_prompt: imageData.revised_prompt || prompt,
+    };
+
+    console.log("[IMAGE_GEN] Result:", {
+      hasUrl: !!result.image_url,
+      hasBase64: !!result.b64_json,
+      revisedPrompt: result.revised_prompt?.substring(0, 100),
+    });
+
+    return JSON.stringify(result);
+  } catch (err) {
+    console.error("[IMAGE_GEN] ❌ Exception:", err.message);
+    console.error("[IMAGE_GEN] Error details:", {
+      status: err.status,
+      code: err.code,
+      type: err.type,
+    });
+    return JSON.stringify({
+      success: false,
+      error: "Image generation failed",
+      message: err.message,
+      code: err.code,
+      prompt,
+    });
+  }
+}
+
 // Set up multer for image and document uploads
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -366,9 +418,9 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     messages.push({
       role: "system",
       content:
-        "You are a helpful AI assistant with web search capabilities. IMPORTANT: When the user asks about current events, news, today's information, real-time data, recent updates, or anything that requires up-to-date information, you MUST use the web_search function to get accurate, current information. Always prefer using web search for questions about 'today', 'now', 'current', 'latest', 'recent', or 'what's happening'. If an image is provided, analyze it and answer the user's question based on both the image and the prompt. If a document is provided, analyze its content and answer based on the document, the prompt, and any other context.",
+        "You are a helpful AI assistant with web search and image generation capabilities. IMPORTANT: When the user asks about current events, news, today's information, real-time data, recent updates, or anything that requires up-to-date information, you MUST use the web_search function to get accurate, current information. Always prefer using web search for questions about 'today', 'now', 'current', 'latest', 'recent', or 'what's happening'. When the user asks to create, generate, draw, or make an image, picture, or artwork, use the generate_image function with a detailed, descriptive prompt. If an image is provided, analyze it and answer the user's question based on both the image and the prompt. If a document is provided, analyze its content and answer based on the document, the prompt, and any other context.",
     });
-    console.log("[STREAM] Added system prompt with web search instructions");
+    console.log("[STREAM] Added system prompt with tool instructions");
 
     // Add conversation history if exists
     if (conversation.messages && conversation.messages.length > 0) {
@@ -443,7 +495,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     console.log("[STREAM] Total messages in context:", messages.length);
 
     try {
-      // Define web search tool for function calling
+      // Define tools for function calling (web search and image generation)
       const tools = [
         {
           type: "function",
@@ -464,6 +516,37 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
             },
           },
         },
+        {
+          type: "function",
+          function: {
+            name: "generate_image",
+            description:
+              "Generate an image using DALL-E based on a text description. Use this when the user asks to create, generate, draw, or make an image, picture, illustration, artwork, or visual content. Always use detailed and descriptive prompts for best results.",
+            parameters: {
+              type: "object",
+              properties: {
+                prompt: {
+                  type: "string",
+                  description:
+                    "A detailed description of the image to generate. Be specific about style, colors, composition, and details. Maximum 4000 characters.",
+                },
+                size: {
+                  type: "string",
+                  enum: ["1024x1024", "1536x1024", "1024x1536", "auto"],
+                  description:
+                    "The size of the generated image. Use 1024x1024 for square, 1536x1024 for landscape, 1024x1536 for portrait, or auto to let the model decide. Default is 1024x1024.",
+                },
+                quality: {
+                  type: "string",
+                  enum: ["low", "medium", "high", "auto"],
+                  description:
+                    "The quality of the generated image. Higher quality takes longer. Default is auto.",
+                },
+              },
+              required: ["prompt"],
+            },
+          },
+        },
       ];
 
       // Check if the query likely needs real-time data
@@ -472,6 +555,19 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
           userMessageContent
         );
       console.log("[STREAM] Query needs real-time data:", needsRealTimeData);
+
+      // Check if the query likely needs image generation
+      const needsImageGeneration =
+        /\b(generate|create|draw|make|design|produce|render)\b.*\b(image|picture|photo|illustration|artwork|visual|graphic|icon|logo|banner)\b/i.test(
+          userMessageContent
+        ) ||
+        /\b(image|picture|photo|illustration|artwork|visual|graphic|icon|logo|banner)\b.*\b(of|for|showing|with|depicting)\b/i.test(
+          userMessageContent
+        );
+      console.log(
+        "[STREAM] Query needs image generation:",
+        needsImageGeneration
+      );
 
       // Determine tool choice based on query content
       const toolChoice = needsRealTimeData ? "required" : "auto";
@@ -493,6 +589,9 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       const preMsg = preflight.choices?.[0]?.message;
       const toolCalls = preMsg?.tool_calls || [];
       console.log("[STREAM] Tool calls detected:", toolCalls.length);
+
+      // Track generated images for the response
+      let generatedImages = [];
 
       if (toolCalls.length > 0) {
         console.log("[STREAM] Processing", toolCalls.length, "tool call(s)...");
@@ -548,6 +647,83 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
               content: result,
             });
             console.log("[STREAM] ✓ Tool result added to messages");
+          } else if (
+            call.type === "function" &&
+            call.function?.name === "generate_image"
+          ) {
+            let args = {};
+            try {
+              args = JSON.parse(call.function.arguments || "{}");
+            } catch (_) {}
+            const imagePrompt = args.prompt || userMessageContent;
+            const size = args.size || "1024x1024";
+            const quality = args.quality || "auto";
+            console.log("[STREAM] Image generation request:", {
+              promptPreview: imagePrompt.substring(0, 100),
+              size,
+              quality,
+            });
+
+            // Send a progress event to the client
+            res.write(
+              `data: ${JSON.stringify({
+                type: "progress",
+                message: "Generating image...",
+                tool: "generate_image",
+                timestamp: new Date().toISOString(),
+              })}\n\n`
+            );
+            if (typeof res.flush === "function") res.flush();
+
+            const genStartTime = Date.now();
+            const result = await performImageGeneration(
+              imagePrompt,
+              size,
+              quality
+            );
+            const genDuration = Date.now() - genStartTime;
+            console.log(
+              "[STREAM] ✓ Image generation completed in",
+              genDuration,
+              "ms"
+            );
+
+            // Parse result and track generated image
+            try {
+              const resultObj = JSON.parse(result);
+              if (
+                resultObj.success &&
+                (resultObj.image_url || resultObj.b64_json)
+              ) {
+                generatedImages.push({
+                  url: resultObj.image_url,
+                  b64_json: resultObj.b64_json,
+                  revised_prompt: resultObj.revised_prompt,
+                });
+                console.log("[STREAM] ✓ Image added to generated images list");
+
+                // Send image event to client immediately
+                res.write(
+                  `data: ${JSON.stringify({
+                    type: "image",
+                    image_url: resultObj.image_url,
+                    b64_json: resultObj.b64_json,
+                    revised_prompt: resultObj.revised_prompt,
+                    timestamp: new Date().toISOString(),
+                  })}\n\n`
+                );
+                if (typeof res.flush === "function") res.flush();
+              }
+            } catch (e) {
+              console.log("[STREAM] Could not parse image generation result");
+            }
+
+            workingMessages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: result,
+            });
+            console.log("[STREAM] ✓ Tool result added to messages");
           }
         }
         console.log("[STREAM] ✓ All tool calls executed");
@@ -567,7 +743,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         });
 
         console.log(
-          `[STREAM] Starting stream with model: ${model} (with web search)`
+          `[STREAM] Starting stream with model: ${model} (with tool results)`
         );
         let chunkCount = 0;
         const streamStartTime = Date.now();
@@ -605,6 +781,8 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
                 type: "done",
                 finish_reason: chunk.choices[0].finish_reason,
                 full_response: fullResponse,
+                generated_images:
+                  generatedImages.length > 0 ? generatedImages : undefined,
                 timestamp: new Date().toISOString(),
               })}\n\n`
             );
@@ -661,6 +839,8 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
                 type: "done",
                 finish_reason: chunk.choices[0].finish_reason,
                 full_response: fullResponse,
+                generated_images:
+                  generatedImages.length > 0 ? generatedImages : undefined,
                 timestamp: new Date().toISOString(),
               })}\n\n`
             );
@@ -697,6 +877,13 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
           metadata: {
             model,
             responseLength: fullResponse.length,
+            generatedImages:
+              generatedImages.length > 0
+                ? generatedImages.map((img) => ({
+                    url: img.url,
+                    revised_prompt: img.revised_prompt,
+                  }))
+                : undefined,
           },
         });
         console.log("[STREAM] ✓ Assistant response saved");
