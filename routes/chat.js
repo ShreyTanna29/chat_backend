@@ -7,6 +7,11 @@ const Space = require("../models/Space");
 const { body, validationResult } = require("express-validator");
 const multer = require("multer");
 const { convertToPCM16 } = require("../utils/audioConverter");
+const {
+  parseDocument,
+  isSupportedDocument,
+  SUPPORTED_DOCUMENT_TYPES,
+} = require("../utils/documentParser");
 
 const router = express.Router();
 
@@ -120,8 +125,19 @@ async function performWebSearch(query) {
   }
 }
 
-// Set up multer for image uploads
-const upload = multer({ storage: multer.memoryStorage() });
+// Set up multer for image and document uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 25 * 1024 * 1024, // 25MB max file size
+  },
+});
+
+// Multer fields configuration for stream endpoint
+const uploadFields = upload.fields([
+  { name: "image", maxCount: 1 },
+  { name: "document", maxCount: 1 },
+]);
 
 // Validation for chat request
 const chatValidation = [
@@ -136,9 +152,9 @@ const chatValidation = [
 ];
 
 // @route   POST /api/chat/stream
-// @desc    Stream chat response from GPT-5 (uses gpt-5-mini for image input)
+// @desc    Stream chat response from GPT-4o (supports image and document input)
 // @access  Private
-router.post("/stream", auth, upload.single("image"), async (req, res) => {
+router.post("/stream", auth, uploadFields, async (req, res) => {
   const requestStartTime = Date.now();
   console.log("\n========== [STREAM] New Request Started ==========");
   console.log("[STREAM] Timestamp:", new Date().toISOString());
@@ -147,7 +163,8 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
 
   try {
     const prompt = req.body.prompt;
-    const imageFile = req.file;
+    const imageFile = req.files?.image?.[0] || null;
+    const documentFile = req.files?.document?.[0] || null;
     const conversationId = req.body.conversationId; // Optional: continue existing conversation
     const thinkMode =
       req.body.thinkMode === "true" || req.body.thinkMode === true; // Optional: use GPT-5 for advanced reasoning
@@ -169,20 +186,75 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
         originalname: imageFile.originalname,
       });
     }
+    console.log("  - Has document:", !!documentFile);
+    if (documentFile) {
+      console.log("  - Document details:", {
+        mimetype: documentFile.mimetype,
+        size: documentFile.size,
+        originalname: documentFile.originalname,
+      });
+    }
     console.log("  - Conversation ID:", conversationId || "New conversation");
     console.log("  - Think Mode:", thinkMode);
     console.log("  - Space ID:", spaceId || "None");
+
+    // Validate document type if provided
+    if (documentFile && !isSupportedDocument(documentFile.mimetype)) {
+      console.log(
+        "[STREAM] ❌ Unsupported document type:",
+        documentFile.mimetype
+      );
+      return res.status(400).json({
+        success: false,
+        message: `Unsupported document type: ${
+          documentFile.mimetype
+        }. Supported types: ${Object.keys(SUPPORTED_DOCUMENT_TYPES).join(
+          ", "
+        )}`,
+      });
+    }
 
     // Use GPT-4o-mini for better rate limits with function calling for web search
     let model = "gpt-4o-mini";
     console.log("[STREAM] Model selected:", model);
 
-    if (!prompt && !imageFile) {
-      console.log("[STREAM] ❌ Validation failed: No prompt or image provided");
+    if (!prompt && !imageFile && !documentFile) {
+      console.log(
+        "[STREAM] ❌ Validation failed: No prompt, image, or document provided"
+      );
       return res.status(400).json({
         success: false,
-        message: "Prompt or image is required",
+        message: "Prompt, image, or document is required",
       });
+    }
+
+    // Parse document if provided
+    let documentContent = null;
+    let documentMetadata = null;
+    if (documentFile) {
+      console.log("[STREAM] Parsing document...");
+      try {
+        const parsed = await parseDocument(
+          documentFile.buffer,
+          documentFile.mimetype,
+          documentFile.originalname
+        );
+        documentContent = parsed.text;
+        documentMetadata = parsed.metadata;
+        console.log("[STREAM] ✓ Document parsed successfully:", {
+          filename: documentMetadata.filename,
+          extractedLength: documentMetadata.extractedLength,
+        });
+      } catch (parseError) {
+        console.error(
+          "[STREAM] ❌ Document parsing failed:",
+          parseError.message
+        );
+        return res.status(400).json({
+          success: false,
+          message: `Failed to parse document: ${parseError.message}`,
+        });
+      }
     }
 
     // Get or create conversation
@@ -294,7 +366,7 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     messages.push({
       role: "system",
       content:
-        "You are a helpful AI assistant with web search capabilities. IMPORTANT: When the user asks about current events, news, today's information, real-time data, recent updates, or anything that requires up-to-date information, you MUST use the web_search function to get accurate, current information. Always prefer using web search for questions about 'today', 'now', 'current', 'latest', 'recent', or 'what's happening'. If an image is provided, analyze it and answer the user's question based on both the image and the prompt.",
+        "You are a helpful AI assistant with web search capabilities. IMPORTANT: When the user asks about current events, news, today's information, real-time data, recent updates, or anything that requires up-to-date information, you MUST use the web_search function to get accurate, current information. Always prefer using web search for questions about 'today', 'now', 'current', 'latest', 'recent', or 'what's happening'. If an image is provided, analyze it and answer the user's question based on both the image and the prompt. If a document is provided, analyze its content and answer based on the document, the prompt, and any other context.",
     });
     console.log("[STREAM] Added system prompt with web search instructions");
 
@@ -316,7 +388,27 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
     }
 
     // Add current user message
-    const userMessageContent = prompt || "What is in this image?";
+    let userMessageContent = prompt || "";
+
+    // Append document content to the user message if provided
+    if (documentContent) {
+      const docPrefix = `\n\n--- Document: ${
+        documentMetadata?.filename || "uploaded document"
+      } ---\n`;
+      const docSuffix = "\n--- End of Document ---\n";
+      userMessageContent =
+        (userMessageContent || "Please analyze this document.") +
+        docPrefix +
+        documentContent +
+        docSuffix;
+      console.log("[STREAM] Document content appended to user message");
+    }
+
+    // Default prompt if only image is provided
+    if (!userMessageContent && imageFile) {
+      userMessageContent = "What is in this image?";
+    }
+
     console.log("[STREAM] Adding current user message...");
     if (imageFile) {
       console.log("[STREAM] Encoding image to base64...");
@@ -337,9 +429,16 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
         "[STREAM] ✓ User message with image added. Base64 length:",
         base64Image.length
       );
+      if (documentContent) {
+        console.log("[STREAM] ✓ Document content also included in message");
+      }
     } else {
       messages.push({ role: "user", content: userMessageContent });
-      console.log("[STREAM] ✓ Text-only user message added");
+      if (documentContent) {
+        console.log("[STREAM] ✓ User message with document content added");
+      } else {
+        console.log("[STREAM] ✓ Text-only user message added");
+      }
     }
     console.log("[STREAM] Total messages in context:", messages.length);
 
@@ -582,6 +681,10 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
           metadata: {
             hasImage: !!imageFile,
             imageType: imageFile?.mimetype,
+            hasDocument: !!documentFile,
+            documentName: documentMetadata?.filename,
+            documentType: documentMetadata?.mimetype,
+            documentSize: documentMetadata?.originalSize,
           },
         });
         console.log("[STREAM] ✓ User message saved");
@@ -619,7 +722,12 @@ router.post("/stream", auth, upload.single("image"), async (req, res) => {
       // Save to user's search history
       try {
         console.log("[STREAM] Saving to user search history...");
-        await User.addToSearchHistory(req.user.id, prompt || "[image]");
+        const historyEntry =
+          prompt ||
+          (documentFile
+            ? `[document: ${documentMetadata?.filename || "uploaded"}]`
+            : "[image]");
+        await User.addToSearchHistory(req.user.id, historyEntry);
         console.log("[STREAM] ✓ Search history updated");
       } catch (historyError) {
         console.error(
