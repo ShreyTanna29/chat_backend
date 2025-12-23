@@ -145,23 +145,15 @@ async function performImageGeneration(
     const imageData = response.data[0];
     console.log("[IMAGE_GEN] ✓ Image generated successfully");
 
-    // Convert base64 to data URL if no direct URL is provided
-    let imageUrl = imageData.url || null;
-    if (!imageUrl && imageData.b64_json) {
-      // Create a data URL from base64 (gpt-image-1 returns PNG format)
-      imageUrl = `data:image/png;base64,${imageData.b64_json}`;
-      console.log("[IMAGE_GEN] Converted base64 to data URL");
-    }
-
     const result = {
       success: true,
-      image_url: imageUrl,
+      b64_json: imageData.b64_json || null,
       revised_prompt: imageData.revised_prompt || prompt,
     };
 
     console.log("[IMAGE_GEN] Result:", {
-      hasUrl: !!result.image_url,
-      urlType: imageData.url ? "direct" : "data_url",
+      hasBase64: !!result.b64_json,
+      base64Length: result.b64_json?.length || 0,
       revisedPrompt: result.revised_prompt?.substring(0, 100),
     });
 
@@ -698,18 +690,18 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
             let toolResponseForLLM = result; // Default to full result
             try {
               const resultObj = JSON.parse(result);
-              if (resultObj.success && resultObj.image_url) {
+              if (resultObj.success && resultObj.b64_json) {
                 generatedImages.push({
-                  url: resultObj.image_url,
+                  b64_json: resultObj.b64_json,
                   revised_prompt: resultObj.revised_prompt,
                 });
                 console.log("[STREAM] ✓ Image added to generated images list");
 
-                // Send image event to client immediately (without b64_json)
+                // Send image event to client with b64_json
                 res.write(
                   `data: ${JSON.stringify({
                     type: "image",
-                    image_url: resultObj.image_url,
+                    b64_json: resultObj.b64_json,
                     revised_prompt: resultObj.revised_prompt,
                     timestamp: new Date().toISOString(),
                   })}\n\n`
