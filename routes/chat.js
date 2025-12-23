@@ -689,6 +689,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
             );
 
             // Parse result and track generated image
+            let toolResponseForLLM = result; // Default to full result
             try {
               const resultObj = JSON.parse(result);
               if (
@@ -713,6 +714,15 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
                   })}\n\n`
                 );
                 if (typeof res.flush === "function") res.flush();
+
+                // Create a lightweight response for the LLM (without base64 data)
+                // This prevents token limit issues when sending back to the model
+                toolResponseForLLM = JSON.stringify({
+                  success: true,
+                  message: "Image generated successfully and sent to the user.",
+                  revised_prompt: resultObj.revised_prompt,
+                  image_delivered: true,
+                });
               }
             } catch (e) {
               console.log("[STREAM] Could not parse image generation result");
@@ -721,7 +731,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
             workingMessages.push({
               role: "tool",
               tool_call_id: call.id,
-              content: result,
+              content: toolResponseForLLM,
             });
             console.log("[STREAM] ✓ Tool result added to messages");
           }
