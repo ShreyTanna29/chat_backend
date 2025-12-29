@@ -11,6 +11,90 @@ const { convertBase64ToPCM16 } = require("../utils/audioConverter");
 const activeSessions = new Map();
 
 /**
+ * Handle client messages and forward to OpenAI
+ * @param {Object} message - Parsed JSON message from client
+ * @param {WebSocket} openaiWs - WebSocket connection to OpenAI
+ * @param {WebSocket} clientWs - WebSocket connection to client
+ */
+async function handleClientMessage(message, openaiWs, clientWs) {
+  // Handle audio data - convert from 3GP/AAC to PCM16 if needed
+  if (message.type === "input_audio_buffer.append" && message.audio) {
+    console.log(
+      `[VOICE-REALTIME] Received audio data length: ${message.audio.length} chars (base64)`
+    );
+
+    try {
+      // Decode base64 to check the audio format
+      const audioBuffer = Buffer.from(message.audio, "base64");
+      console.log(
+        `[VOICE-REALTIME] Audio buffer size: ${audioBuffer.length} bytes`
+      );
+
+      // Check if this looks like it needs conversion (3GP/AAC typically starts with specific bytes)
+      // 3GP files start with "ftyp" at offset 4, AAC/M4A similar
+      const needsConversion =
+        audioBuffer.length > 8 &&
+        (audioBuffer.toString("ascii", 4, 8) === "ftyp" ||
+          audioBuffer.toString("ascii", 4, 8) === "mdat" ||
+          // Check for ADTS AAC header (0xFF 0xF0-0xFF)
+          (audioBuffer[0] === 0xff && (audioBuffer[1] & 0xf0) === 0xf0));
+
+      if (needsConversion) {
+        console.log("[VOICE-REALTIME] Detected non-PCM16 audio, converting...");
+        const pcm16Audio = await convertBase64ToPCM16(message.audio);
+        message.audio = pcm16Audio;
+        console.log(
+          `[VOICE-REALTIME] Converted audio length: ${pcm16Audio.length} chars (base64)`
+        );
+      } else {
+        // Assume it's already PCM16 or compatible format
+        console.log(
+          "[VOICE-REALTIME] Audio appears to be PCM16, forwarding directly"
+        );
+      }
+
+      // Validate PCM16 format (should be even number of bytes)
+      const finalBuffer = Buffer.from(message.audio, "base64");
+      if (finalBuffer.length % 2 !== 0) {
+        console.warn(
+          `[VOICE-REALTIME] WARNING: Audio buffer size is odd (${finalBuffer.length} bytes) - may not be valid PCM16`
+        );
+      }
+    } catch (e) {
+      console.error(`[VOICE-REALTIME] Audio processing error:`, e.message);
+      clientWs.send(
+        JSON.stringify({
+          type: "error",
+          error: {
+            message: "Audio processing failed",
+            details: e.message,
+          },
+        })
+      );
+      return;
+    }
+  }
+
+  // Forward the message to OpenAI
+  if (openaiWs.readyState === WebSocket.OPEN) {
+    openaiWs.send(JSON.stringify(message));
+  } else {
+    console.error(
+      "[VOICE-REALTIME] OpenAI WebSocket not open, cannot forward message"
+    );
+    clientWs.send(
+      JSON.stringify({
+        type: "error",
+        error: {
+          message: "Connection to AI not ready",
+          details: "Please wait for connection to be established",
+        },
+      })
+    );
+  }
+}
+
+/**
  * Initialize WebSocket server for real-time voice chat
  * @param {http.Server} server - HTTP server instance
  */
@@ -71,29 +155,34 @@ function initVoiceChat(server) {
       );
 
       // Configure the session
-      openaiWs.send(
-        JSON.stringify({
-          type: "session.update",
-          session: {
-            modalities: ["text", "audio"],
-            instructions:
-              "You are a helpful AI assistant. Respond in a conversational and friendly tone. Keep responses concise and natural for voice conversation.",
-            voice: "alloy",
-            input_audio_format: "pcm16",
-            output_audio_format: "pcm16",
-            input_audio_transcription: {
-              model: "whisper-1",
-            },
-            turn_detection: {
-              type: "server_vad",
-              threshold: 0.5,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 500,
-            },
-            temperature: 0.8,
+      // Using the format compatible with gpt-realtime-mini-2025-12-15
+      const sessionConfig = {
+        type: "session.update",
+        session: {
+          modalities: ["text", "audio"],
+          instructions:
+            "You are a helpful AI assistant. Respond in a conversational and friendly tone. Keep responses concise and natural for voice conversation.",
+          voice: "alloy",
+          input_audio_format: "pcm16",
+          output_audio_format: "pcm16",
+          input_audio_transcription: {
+            model: "whisper-1",
           },
-        })
+          turn_detection: {
+            type: "server_vad",
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 500,
+          },
+          temperature: 0.8,
+        },
+      };
+
+      console.log(
+        `[VOICE-REALTIME] Sending session config:`,
+        JSON.stringify(sessionConfig, null, 2)
       );
+      openaiWs.send(JSON.stringify(sessionConfig));
 
       // Send connection success to client
       clientWs.send(
@@ -110,69 +199,45 @@ function initVoiceChat(server) {
       try {
         // Check if data is binary (Buffer) or text
         if (Buffer.isBuffer(data)) {
-          // Binary data - forward directly to OpenAI
-          console.log(
-            `[VOICE-REALTIME] Forwarding binary data (${data.length} bytes)`
-          );
-          openaiWs.send(data);
-          return;
+          // Binary data - OpenAI Realtime API expects JSON messages, not raw binary
+          // Try to decode as UTF-8 and parse as JSON
+          try {
+            const textData = data.toString("utf8");
+            const message = JSON.parse(textData);
+            console.log(
+              `[VOICE-REALTIME] Parsed binary as JSON message type: ${message.type}`
+            );
+            // Process the message normally (fall through to JSON handling below)
+            await handleClientMessage(message, openaiWs, clientWs);
+            return;
+          } catch (parseError) {
+            // If we can't parse as JSON, it might be raw audio data
+            // Convert to base64 and send as input_audio_buffer.append
+            console.log(
+              `[VOICE-REALTIME] Received binary data (${data.length} bytes) - converting to audio append event`
+            );
+
+            // Only process if it looks like valid audio data (more than a few bytes)
+            if (data.length > 100) {
+              const base64Audio = data.toString("base64");
+              const audioEvent = {
+                type: "input_audio_buffer.append",
+                audio: base64Audio,
+              };
+              openaiWs.send(JSON.stringify(audioEvent));
+            } else {
+              console.warn(
+                `[VOICE-REALTIME] Ignoring small binary data (${data.length} bytes) - likely not valid audio`
+              );
+            }
+            return;
+          }
         }
 
         // Try to parse as JSON
         const message = JSON.parse(data.toString());
         console.log(`[VOICE-REALTIME] Client message type: ${message.type}`);
-
-        // Handle audio data - convert from 3GP to PCM16
-        if (message.type === "input_audio_buffer.append" && message.audio) {
-          console.log(
-            `[VOICE-REALTIME] Received 3GP audio data length: ${message.audio.length} chars (base64)`
-          );
-
-          try {
-            // Convert 3GP/AAC audio to PCM16 WAV at 24kHz
-            console.log("[VOICE-REALTIME] Converting 3GP audio to PCM16...");
-            const pcm16Audio = await convertBase64ToPCM16(message.audio);
-
-            // Replace the audio data with converted PCM16
-            message.audio = pcm16Audio;
-
-            console.log(
-              `[VOICE-REALTIME] Converted audio length: ${pcm16Audio.length} chars (base64)`
-            );
-
-            // Validate converted audio
-            const audioBuffer = Buffer.from(pcm16Audio, "base64");
-            console.log(
-              `[VOICE-REALTIME] Converted PCM16 size: ${audioBuffer.length} bytes`
-            );
-
-            // PCM16 should be even number of bytes (2 bytes per sample)
-            if (audioBuffer.length % 2 !== 0) {
-              console.warn(
-                `[VOICE-REALTIME] WARNING: Audio buffer size is odd - may not be valid PCM16`
-              );
-            }
-          } catch (e) {
-            console.error(
-              `[VOICE-REALTIME] Audio conversion error:`,
-              e.message
-            );
-            clientWs.send(
-              JSON.stringify({
-                type: "error",
-                error: {
-                  message: "Audio conversion failed",
-                  details: e.message,
-                },
-              })
-            );
-            return;
-          }
-        }
-
-        // Forward all message types to OpenAI
-        // The OpenAI Realtime API will handle all message types appropriately
-        openaiWs.send(JSON.stringify(message));
+        await handleClientMessage(message, openaiWs, clientWs);
       } catch (error) {
         console.error("[VOICE-REALTIME] Error handling client message:", error);
         console.error(
@@ -199,13 +264,23 @@ function initVoiceChat(server) {
         // Log important events
         if (
           message.type === "response.audio.delta" ||
-          message.type === "response.audio_transcript.delta"
+          message.type === "response.audio_transcript.delta" ||
+          message.type === "response.output_audio.delta"
         ) {
           // Don't log every audio chunk to avoid spam
         } else if (message.type === "error") {
           console.error(
             `[VOICE-REALTIME] OpenAI Error:`,
             JSON.stringify(message, null, 2)
+          );
+        } else if (
+          message.type === "session.created" ||
+          message.type === "session.updated"
+        ) {
+          console.log(`[VOICE-REALTIME] Session event: ${message.type}`);
+          console.log(
+            `[VOICE-REALTIME] Session config:`,
+            JSON.stringify(message.session || message, null, 2)
           );
         } else {
           console.log(`[VOICE-REALTIME] OpenAI message type: ${message.type}`);

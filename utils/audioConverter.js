@@ -6,9 +6,10 @@ const { Readable } = require("stream");
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 /**
- * Convert audio buffer (3GP/AAC/any format) to PCM16 WAV at 24kHz
+ * Convert audio buffer (3GP/AAC/any format) to raw PCM16 at 24kHz
+ * Note: OpenAI Realtime API expects raw PCM16 without WAV headers
  * @param {Buffer} inputBuffer - Input audio buffer in any format
- * @returns {Promise<Buffer>} - Output audio buffer in PCM16 WAV format at 24kHz
+ * @returns {Promise<Buffer>} - Output audio buffer in raw PCM16 format at 24kHz
  */
 function convertToPCM16(inputBuffer) {
   return new Promise((resolve, reject) => {
@@ -20,12 +21,12 @@ function convertToPCM16(inputBuffer) {
     inputStream.push(null);
 
     // Convert audio using ffmpeg
+    // Output raw PCM16 (s16le format) without WAV container
     ffmpeg(inputStream)
-      .inputFormat("3gp") // Input format - handles 3GP/AAC
       .audioCodec("pcm_s16le") // PCM 16-bit little-endian
       .audioFrequency(24000) // 24kHz sample rate (required by OpenAI)
       .audioChannels(1) // Mono audio
-      .format("wav") // WAV container format
+      .format("s16le") // Raw PCM output format (no WAV header)
       .on("error", (err) => {
         console.error("[AUDIO-CONVERTER] Conversion error:", err);
         reject(err);
@@ -33,7 +34,7 @@ function convertToPCM16(inputBuffer) {
       .on("end", () => {
         const outputBuffer = Buffer.concat(chunks);
         console.log(
-          `[AUDIO-CONVERTER] Conversion complete. Output size: ${outputBuffer.length} bytes`
+          `[AUDIO-CONVERTER] Conversion complete. Output size: ${outputBuffer.length} bytes (raw PCM16)`
         );
         resolve(outputBuffer);
       })
