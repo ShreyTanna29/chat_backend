@@ -257,6 +257,9 @@ function initVoiceChat(server) {
       }
     });
 
+    // Track if we need to manually trigger response
+    let audioChunkCount = 0;
+
     // Forward messages from OpenAI to client
     openaiWs.on("message", (data) => {
       try {
@@ -268,7 +271,11 @@ function initVoiceChat(server) {
           message.type === "response.audio_transcript.delta" ||
           message.type === "response.output_audio.delta"
         ) {
-          // Don't log every audio chunk to avoid spam
+          // Count audio chunks for debugging
+          audioChunkCount++;
+          if (audioChunkCount === 1) {
+            console.log(`[VOICE-REALTIME] Receiving audio response chunks...`);
+          }
         } else if (message.type === "error") {
           console.error(
             `[VOICE-REALTIME] OpenAI Error:`,
@@ -283,6 +290,53 @@ function initVoiceChat(server) {
             `[VOICE-REALTIME] Session config:`,
             JSON.stringify(message.session || message, null, 2)
           );
+        } else if (message.type === "response.done") {
+          // Log the full response.done to see what's in it
+          console.log(
+            `[VOICE-REALTIME] Response done (${audioChunkCount} audio chunks sent):`,
+            JSON.stringify(message, null, 2)
+          );
+          audioChunkCount = 0; // Reset for next response
+        } else if (message.type === "response.created") {
+          console.log(
+            `[VOICE-REALTIME] Response created:`,
+            JSON.stringify(message.response?.id || message, null, 2)
+          );
+        } else if (message.type === "conversation.item.created") {
+          // Log the conversation item
+          console.log(
+            `[VOICE-REALTIME] Conversation item created:`,
+            JSON.stringify(
+              {
+                id: message.item?.id,
+                type: message.item?.type,
+                role: message.item?.role,
+                status: message.item?.status,
+              },
+              null,
+              2
+            )
+          );
+        } else if (message.type === "input_audio_buffer.committed") {
+          console.log(
+            `[VOICE-REALTIME] Audio buffer committed, manually triggering response...`
+          );
+          // Manually trigger response creation as a fallback
+          // This ensures a response is always generated after user input
+          setTimeout(() => {
+            if (openaiWs.readyState === WebSocket.OPEN) {
+              const responseCreate = {
+                type: "response.create",
+                response: {
+                  modalities: ["text", "audio"],
+                },
+              };
+              console.log(`[VOICE-REALTIME] Sending manual response.create`);
+              openaiWs.send(JSON.stringify(responseCreate));
+            }
+          }, 100); // Small delay to ensure conversation item is fully created
+        } else if (message.type === "input_audio_buffer.speech_stopped") {
+          console.log(`[VOICE-REALTIME] Speech stopped detected by server VAD`);
         } else {
           console.log(`[VOICE-REALTIME] OpenAI message type: ${message.type}`);
         }
