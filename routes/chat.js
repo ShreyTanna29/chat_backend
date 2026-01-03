@@ -195,10 +195,6 @@ const chatValidation = [
     .trim()
     .isLength({ min: 1, max: 4000 })
     .withMessage("Prompt must be between 1 and 4000 characters"),
-  body("model")
-    .optional()
-    .isIn(["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"])
-    .withMessage("Invalid model specified"),
 ];
 
 // @route   POST /api/chat/stream
@@ -1009,7 +1005,7 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
 
     const {
       prompt,
-      model = "gpt-4.1-mini",
+      model = thinkMode ? "gpt-5" : "gpt-5-nano",
       conversationId,
       spaceId,
     } = req.body;
@@ -1188,8 +1184,8 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
       });
     }
 
-    // Always use gpt-4.1-mini by default
-    const model = "gpt-4.1-mini";
+    // Always use gpt-5-nano by default
+    const model = thinkMode ? "gpt-5" : "gpt-5-nano";
     const messages = [];
     if (space?.defaultPrompt) {
       messages.push({ role: "system", content: space.defaultPrompt });
@@ -1397,8 +1393,8 @@ router.post("/voice", auth, upload.single("audio"), async (req, res) => {
       `[VOICE] Transcription received - Text length: ${userText.length} chars`
     );
 
-    // Step 2: Get AI response using gpt-4.1-mini
-    const chatModel = "gpt-4.1-mini";
+    // Step 2: Get AI response using gpt-5-nano
+    const chatModel = thinkMode ? "gpt-5" : "gpt-5-nano";
     console.log(`[VOICE] Sending request to model: ${chatModel}`);
     const aiResp = await openai.chat.completions.create({
       model: chatModel,
