@@ -261,7 +261,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     }
 
     // Use GPT-5-nano for better rate limits with function calling for web search
-    let model = thinkMode ? "gpt-5.2" : "gpt-5-mini";
+    let model = thinkMode ? "gpt-5.2-2025-12-11" : "gpt-5-mini-2025-08-07";
     console.log("[STREAM] Model selected:", model);
 
     if (!prompt && !imageFile && !documentFile) {
@@ -1005,7 +1005,7 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
 
     const {
       prompt,
-      model = thinkMode ? "gpt-5.2" : "gpt-5-mini",
+      model = thinkMode ? "gpt-5.2-2025-12-11" : "gpt-5-mini-2025-08-07",
       conversationId,
       spaceId,
     } = req.body;
@@ -1185,7 +1185,7 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
     }
 
     // Always use gpt-5-nano by default
-    const model = thinkMode ? "gpt-5.2" : "gpt-5-mini";
+    const model = thinkMode ? "gpt-5.2-2025-12-11" : "gpt-5-mini-2025-08-07";
     const messages = [];
     if (space?.defaultPrompt) {
       messages.push({ role: "system", content: space.defaultPrompt });
@@ -1394,7 +1394,7 @@ router.post("/voice", auth, upload.single("audio"), async (req, res) => {
     );
 
     // Step 2: Get AI response using gpt-5-nano
-    const chatModel = thinkMode ? "gpt-5.2" : "gpt-5-mini";
+    const chatModel = thinkMode ? "gpt-5.2" : "gpt-5-mini-2025-08-07";
     console.log(`[VOICE] Sending request to model: ${chatModel}`);
     const aiResp = await openai.chat.completions.create({
       model: chatModel,
