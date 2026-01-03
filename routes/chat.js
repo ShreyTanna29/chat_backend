@@ -202,7 +202,7 @@ const chatValidation = [
 ];
 
 // @route   POST /api/chat/stream
-// @desc    Stream chat response from GPT-4o (supports image and document input)
+// @desc    Stream chat response from GPT-5 (supports image and document input)
 // @access  Private
 router.post("/stream", auth, uploadFields, async (req, res) => {
   const requestStartTime = Date.now();
@@ -264,8 +264,8 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       });
     }
 
-    // Use GPT-4o-mini for better rate limits with function calling for web search
-    let model = "gpt-4o-mini";
+    // Use GPT-5-nano for better rate limits with function calling for web search
+    let model = thinkMode ? "gpt-5" : "gpt-5-nano";
     console.log("[STREAM] Model selected:", model);
 
     if (!prompt && !imageFile && !documentFile) {
