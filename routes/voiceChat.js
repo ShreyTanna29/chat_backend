@@ -329,6 +329,7 @@ function initVoiceChat(server) {
                 type: "response.create",
                 response: {
                   modalities: ["text", "audio"],
+                  voice: "alloy",
                 },
               };
               console.log(`[VOICE-REALTIME] Sending manual response.create`);
