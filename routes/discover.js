@@ -122,32 +122,61 @@ async function performWebSearch(query) {
   }
 }
 
-// Fetch tech news using Web Search + LLM
-async function fetchTechNewsFromLLM() {
-  console.log("[DISCOVER] Fetching tech news with Web Search...");
-  newsCache.isLoading = true;
+// Helper function to remove duplicate news based on title similarity
+function removeDuplicateNews(newsItems) {
+  const seen = new Set();
+  const unique = [];
 
-  try {
-    const today = new Date().toLocaleDateString("en-US", {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
+  for (const item of newsItems) {
+    // Normalize title for comparison (lowercase, remove extra spaces/punctuation)
+    const normalizedTitle = item.title
+      ?.toLowerCase()
+      .replace(/[^\w\s]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
 
-    // Step 1: Search for news
-    const searchQuery = `top technology news headlines and stories ${today}`;
-    const searchData = await performWebSearch(searchQuery);
+    if (!normalizedTitle || seen.has(normalizedTitle)) {
+      continue;
+    }
 
-    // Step 2: Process with LLM
-    const prompt = `You are a tech news curator. I have performed a web search for today's top tech news (${today}).
+    // Also check for very similar titles (first 50 chars match)
+    const titlePrefix = normalizedTitle.substring(0, 50);
+    let isDuplicate = false;
+    for (const seenTitle of seen) {
+      if (
+        seenTitle.startsWith(titlePrefix) ||
+        titlePrefix.startsWith(seenTitle.substring(0, 50))
+      ) {
+        isDuplicate = true;
+        break;
+      }
+    }
+
+    if (!isDuplicate) {
+      seen.add(normalizedTitle);
+      unique.push(item);
+    }
+  }
+
+  return unique;
+}
+
+// Helper function to parse LLM response with retry
+async function parseNewsWithRetry(searchData, today, maxRetries = 3) {
+  const targetCount = 20;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[DISCOVER] Parsing attempt ${attempt}/${maxRetries}...`);
+
+      const prompt = `You are a tech news curator. I have performed a web search for today's top tech news (${today}).
 Here are the search results:
 ${JSON.stringify(searchData.results, null, 2)}
 
 Here are some related images found:
 ${JSON.stringify(searchData.images, null, 2)}
 
-Your task is to curate a list of the top 20 most important and trending technology news stories based on these results.
+Your task is to curate a list of the top ${targetCount} most important and trending technology news stories based on these results.
 
 For each news item, provide:
 1. A compelling headline/title
@@ -159,7 +188,7 @@ For each news item, provide:
    - FALLBACK: If no real image is available, use a placeholder: https://placehold.co/800x600?text=Tech+News
 5. A category (AI, Software, Hardware, Startups, Cybersecurity, Cloud, Mobile, Gaming, Science, Business)
 
-Return the response as a valid JSON array with exactly 20 objects (or fewer if not enough unique stories found, but aim for 20).
+Return the response as a valid JSON array with exactly ${targetCount} objects (or fewer if not enough unique stories found, but aim for ${targetCount}).
 Each object must have:
 - "id": "news-1", "news-2", etc.
 - "title"
@@ -169,80 +198,199 @@ Each object must have:
 - "category"
 - "publishedAt": "${new Date().toISOString()}"
 
-IMPORTANT: Return ONLY the JSON array.`;
+IMPORTANT: Return ONLY the JSON array. Make sure all ${targetCount} items are UNIQUE with different headlines.`;
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a tech news curator that returns responses in valid JSON format only.",
-        },
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-      temperature: 0.5,
-      max_tokens: 4000,
-      response_format: { type: "json_object" }, // Enforce JSON mode
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a tech news curator that returns responses in valid JSON format only. Always aim to return exactly 20 unique news items.",
+          },
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+        temperature: 0.5,
+        max_tokens: 5000,
+        response_format: { type: "json_object" },
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error("No response content from LLM");
+      }
+
+      console.log("[DISCOVER] Raw LLM Response length:", content.length);
+
+      // Parse JSON
+      const parsedResponse = JSON.parse(content);
+
+      // Handle different JSON structures (array vs object with key)
+      let newsItems = [];
+      if (Array.isArray(parsedResponse)) {
+        newsItems = parsedResponse;
+      } else if (parsedResponse.news && Array.isArray(parsedResponse.news)) {
+        newsItems = parsedResponse.news;
+      } else if (parsedResponse.data && Array.isArray(parsedResponse.data)) {
+        newsItems = parsedResponse.data;
+      } else if (
+        parsedResponse.articles &&
+        Array.isArray(parsedResponse.articles)
+      ) {
+        newsItems = parsedResponse.articles;
+      } else if (
+        parsedResponse.stories &&
+        Array.isArray(parsedResponse.stories)
+      ) {
+        newsItems = parsedResponse.stories;
+      } else {
+        // Try to find the first array in the object
+        const firstArray = Object.values(parsedResponse).find((val) =>
+          Array.isArray(val)
+        );
+        if (firstArray) {
+          newsItems = firstArray;
+        }
+      }
+
+      if (newsItems.length === 0) {
+        throw new Error("Could not extract news array from LLM response");
+      }
+
+      console.log(
+        `[DISCOVER] Parsed ${newsItems.length} news items on attempt ${attempt}`
+      );
+      return newsItems;
+    } catch (parseError) {
+      console.error(
+        `[DISCOVER] Parse attempt ${attempt} failed:`,
+        parseError.message
+      );
+      if (attempt === maxRetries) {
+        throw parseError;
+      }
+      // Wait a bit before retrying
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+}
+
+// Fetch tech news using Web Search + LLM with retry and deduplication
+async function fetchTechNewsFromLLM() {
+  console.log("[DISCOVER] Fetching tech news with Web Search...");
+  newsCache.isLoading = true;
+
+  const TARGET_NEWS_COUNT = 20;
+  const MAX_FETCH_ROUNDS = 3;
+
+  try {
+    const today = new Date().toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
     });
 
-    const content = response.choices[0]?.message?.content;
-    if (!content) {
-      throw new Error("No response content from LLM");
-    }
+    // Different search queries to get diverse results
+    const searchQueries = [
+      `top technology news headlines and stories ${today}`,
+      `latest tech industry news AI software ${today}`,
+      `breaking technology startup cybersecurity news ${today}`,
+    ];
 
-    console.log("[DISCOVER] Raw LLM Response:", content);
+    let allNewsItems = [];
+    let fetchRound = 0;
 
-    // Parse JSON
-    let parsedResponse;
-    try {
-      parsedResponse = JSON.parse(content);
-    } catch (e) {
-      // Handle case where it might be wrapped in a key like "news": [...] due to json_object mode
-      console.log("[DISCOVER] Raw JSON content:", content.substring(0, 200));
-      console.error("[DISCOVER] JSON Parse Error:", e.message);
-      throw e;
-    }
+    while (
+      allNewsItems.length < TARGET_NEWS_COUNT &&
+      fetchRound < MAX_FETCH_ROUNDS
+    ) {
+      const queryIndex = fetchRound % searchQueries.length;
+      const searchQuery = searchQueries[queryIndex];
 
-    // Handle different JSON structures (array vs object with key)
-    let newsItems = [];
-    if (Array.isArray(parsedResponse)) {
-      newsItems = parsedResponse;
-    } else if (parsedResponse.news && Array.isArray(parsedResponse.news)) {
-      newsItems = parsedResponse.news;
-    } else if (parsedResponse.data && Array.isArray(parsedResponse.data)) {
-      newsItems = parsedResponse.data;
-    } else {
-      // Try to find the first array in the object
-      const firstArray = Object.values(parsedResponse).find((val) =>
-        Array.isArray(val)
+      console.log(
+        `[DISCOVER] Fetch round ${
+          fetchRound + 1
+        }/${MAX_FETCH_ROUNDS}, current items: ${allNewsItems.length}`
       );
-      if (firstArray) {
-        newsItems = firstArray;
+
+      try {
+        // Step 1: Search for news
+        const searchData = await performWebSearch(searchQuery);
+
+        if (!searchData.results || searchData.results.length === 0) {
+          console.log("[DISCOVER] No search results, trying next query...");
+          fetchRound++;
+          continue;
+        }
+
+        // Step 2: Process with LLM (with retry)
+        const newsItems = await parseNewsWithRetry(searchData, today, 3);
+
+        // Step 3: Normalize and add to collection
+        const normalizedItems = newsItems.map((item, index) => ({
+          id: item.id || `news-${allNewsItems.length + index + 1}`,
+          title: item.title || "Untitled",
+          summary: item.summary || "",
+          source: item.source || "Unknown",
+          imageUrl:
+            item.imageUrl || "https://placehold.co/800x600?text=Tech+News",
+          category: item.category || "Technology",
+          publishedAt: item.publishedAt || new Date().toISOString(),
+        }));
+
+        allNewsItems = [...allNewsItems, ...normalizedItems];
+
+        // Remove duplicates after each round
+        allNewsItems = removeDuplicateNews(allNewsItems);
+
+        console.log(
+          `[DISCOVER] After deduplication: ${allNewsItems.length} unique items`
+        );
+      } catch (roundError) {
+        console.error(
+          `[DISCOVER] Fetch round ${fetchRound + 1} failed:`,
+          roundError.message
+        );
+      }
+
+      fetchRound++;
+
+      // If we have enough, stop
+      if (allNewsItems.length >= TARGET_NEWS_COUNT) {
+        break;
+      }
+
+      // Small delay between rounds to avoid rate limiting
+      if (
+        fetchRound < MAX_FETCH_ROUNDS &&
+        allNewsItems.length < TARGET_NEWS_COUNT
+      ) {
+        console.log("[DISCOVER] Need more news, fetching additional batch...");
+        await new Promise((resolve) => setTimeout(resolve, 2000));
       }
     }
 
-    if (newsItems.length === 0) {
-      console.error(
-        "[DISCOVER] Parsed Object Structure:",
-        JSON.stringify(parsedResponse, null, 2)
-      );
-      throw new Error("Could not extract news array from LLM response");
+    // Final deduplication and limiting
+    allNewsItems = removeDuplicateNews(allNewsItems);
+
+    // Re-assign IDs sequentially
+    allNewsItems = allNewsItems
+      .slice(0, TARGET_NEWS_COUNT)
+      .map((item, index) => ({
+        ...item,
+        id: `news-${index + 1}`,
+      }));
+
+    if (allNewsItems.length === 0) {
+      throw new Error("Failed to fetch any news items after all attempts");
     }
 
     // Update cache
-    newsCache.data = newsItems.slice(0, 20).map((item, index) => ({
-      id: item.id || `news-${index + 1}`,
-      title: item.title || "Untitled",
-      summary: item.summary || "",
-      source: item.source || "Unknown",
-      imageUrl: item.imageUrl || "https://placehold.co/800x600?text=Tech+News",
-      category: item.category || "Technology",
-      publishedAt: item.publishedAt || new Date().toISOString(),
-    }));
+    newsCache.data = allNewsItems;
     newsCache.lastUpdated = new Date();
     newsCache.isLoading = false;
 
@@ -250,7 +398,7 @@ IMPORTANT: Return ONLY the JSON array.`;
     console.log(
       "[DISCOVER] Successfully fetched and cached",
       newsCache.data.length,
-      "news items"
+      "unique news items"
     );
     return newsCache.data;
   } catch (error) {
