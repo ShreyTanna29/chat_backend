@@ -45,6 +45,10 @@ process.on("SIGTERM", async () => {
 // Routes
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/chat", require("./routes/chat"));
+app.use("/api/discover", require("./routes/discover"));
+
+// Initialize discover cron job
+require("./routes/discover").initDiscoverCron();
 
 // Health check route
 app.get("/health", (req, res) => {
