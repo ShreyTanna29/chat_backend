@@ -71,9 +71,60 @@ function saveCacheToFile() {
   }
 }
 
-// Fetch tech news from OpenAI
+const axios = require("axios");
+
+// Perform web search via Tavily
+async function performWebSearch(query) {
+  console.log("[DISCOVER] Starting web search for query:", query);
+  try {
+    const apiKey = process.env.TAVILY_API_KEY;
+    if (!apiKey) {
+      console.error("[DISCOVER] ❌ TAVILY_API_KEY not configured!");
+      throw new Error("TAVILY_API_KEY not configured");
+    }
+
+    console.log("[DISCOVER] Making request to Tavily API...");
+    const response = await axios.post(
+      "https://api.tavily.com/search",
+      {
+        api_key: apiKey,
+        query,
+        include_answer: true,
+        include_images: true, // Request images
+        max_results: 10, // Get enough results to filter
+        search_depth: "advanced",
+        topic: "news", // Optimize for news
+      },
+      {
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+
+    const data = response.data;
+    console.log(
+      "[DISCOVER] ✓ Received",
+      data.results?.length || 0,
+      "results and",
+      data.images?.length || 0,
+      "images"
+    );
+
+    return {
+      results: data.results || [],
+      images: data.images || [],
+    };
+  } catch (err) {
+    console.error("[DISCOVER] ❌ Web search failed:", err.message);
+    if (err.response) {
+      console.error("[DISCOVER] Error details:", err.response.data);
+    }
+    throw err;
+  }
+}
+
+// Fetch tech news using Web Search + LLM
 async function fetchTechNewsFromLLM() {
-  console.log("[DISCOVER] Fetching tech news from LLM...");
+  console.log("[DISCOVER] Fetching tech news with Web Search...");
   newsCache.isLoading = true;
 
   try {
@@ -84,37 +135,41 @@ async function fetchTechNewsFromLLM() {
       day: "numeric",
     });
 
-    const prompt = `You are a tech news curator. Generate a list of the top 20 most important and trending technology news stories for today (${today}).
+    // Step 1: Search for news
+    const searchQuery = `top technology news headlines and stories ${today}`;
+    const searchData = await performWebSearch(searchQuery);
+
+    // Step 2: Process with LLM
+    const prompt = `You are a tech news curator. I have performed a web search for today's top tech news (${today}).
+Here are the search results:
+${JSON.stringify(searchData.results, null, 2)}
+
+Here are some related images found:
+${JSON.stringify(searchData.images, null, 2)}
+
+Your task is to curate a list of the top 20 most important and trending technology news stories based on these results.
 
 For each news item, provide:
 1. A compelling headline/title
 2. A brief summary (2-3 sentences)
-3. The source name (use real, well-known tech news sources like TechCrunch, The Verge, Wired, Ars Technica, MIT Technology Review, etc.)
-4. A relevant public image URL from Unsplash that relates to the topic. Use the format: https://source.unsplash.com/800x600/?keyword where keyword is a relevant search term for that news item (e.g., "artificial-intelligence", "smartphone", "cybersecurity", etc.)
-5. A category (one of: AI, Software, Hardware, Startups, Cybersecurity, Cloud, Mobile, Gaming, Science, Business)
+3. The source name (e.g., TechCrunch, The Verge, etc. - derive from the search result URL or title if possible)
+4. A relevant image URL. 
+   - PRIORITY: Use a valid image URL from the 'images' list provided above if it matches the news topic.
+   - SECONDARY: If the search result item itself has an image URL, use that.
+   - FALLBACK: If no real image is available, use a placeholder: https://placehold.co/800x600?text=Tech+News
+5. A category (AI, Software, Hardware, Startups, Cybersecurity, Cloud, Mobile, Gaming, Science, Business)
 
-Focus on recent developments in:
-- Artificial Intelligence and Machine Learning
-- Major tech company announcements
-- Software and app releases
-- Hardware and gadgets
-- Cybersecurity
-- Startups and funding
-- Cloud computing
-- Mobile technology
-- Gaming and entertainment tech
-- Science and research breakthroughs
+Return the response as a valid JSON array with exactly 20 objects (or fewer if not enough unique stories found, but aim for 20).
+Each object must have:
+- "id": "news-1", "news-2", etc.
+- "title"
+- "summary"
+- "source"
+- "imageUrl"
+- "category"
+- "publishedAt": "${new Date().toISOString()}"
 
-Return the response as a valid JSON array with exactly 20 objects. Each object should have these fields:
-- "id": a unique string identifier (use format "news-1", "news-2", etc.)
-- "title": the headline
-- "summary": the brief description
-- "source": the news source name
-- "imageUrl": the Unsplash image URL
-- "category": the category
-- "publishedAt": today's date in ISO format
-
-IMPORTANT: Return ONLY the JSON array, no additional text or markdown formatting.`;
+IMPORTANT: Return ONLY the JSON array.`;
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
@@ -129,8 +184,9 @@ IMPORTANT: Return ONLY the JSON array, no additional text or markdown formatting
           content: prompt,
         },
       ],
-      temperature: 0.7,
+      temperature: 0.5,
       max_tokens: 4000,
+      response_format: { type: "json_object" }, // Enforce JSON mode
     });
 
     const content = response.choices[0]?.message?.content;
@@ -138,28 +194,43 @@ IMPORTANT: Return ONLY the JSON array, no additional text or markdown formatting
       throw new Error("No response content from LLM");
     }
 
-    // Parse the JSON response
-    let newsItems;
+    console.log("[DISCOVER] Raw LLM Response:", content);
+
+    // Parse JSON
+    let parsedResponse;
     try {
-      // Try to extract JSON from the response (in case of markdown wrapping)
-      const jsonMatch = content.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        newsItems = JSON.parse(jsonMatch[0]);
-      } else {
-        newsItems = JSON.parse(content);
-      }
-    } catch (parseError) {
-      console.error(
-        "[DISCOVER] Failed to parse LLM response:",
-        parseError.message
-      );
-      console.error("[DISCOVER] Raw content:", content.substring(0, 500));
-      throw new Error("Failed to parse news data from LLM");
+      parsedResponse = JSON.parse(content);
+    } catch (e) {
+      // Handle case where it might be wrapped in a key like "news": [...] due to json_object mode
+      console.log("[DISCOVER] Raw JSON content:", content.substring(0, 200));
+      console.error("[DISCOVER] JSON Parse Error:", e.message);
+      throw e;
     }
 
-    // Validate and normalize the news items
-    if (!Array.isArray(newsItems) || newsItems.length === 0) {
-      throw new Error("Invalid news data structure from LLM");
+    // Handle different JSON structures (array vs object with key)
+    let newsItems = [];
+    if (Array.isArray(parsedResponse)) {
+      newsItems = parsedResponse;
+    } else if (parsedResponse.news && Array.isArray(parsedResponse.news)) {
+      newsItems = parsedResponse.news;
+    } else if (parsedResponse.data && Array.isArray(parsedResponse.data)) {
+      newsItems = parsedResponse.data;
+    } else {
+      // Try to find the first array in the object
+      const firstArray = Object.values(parsedResponse).find((val) =>
+        Array.isArray(val)
+      );
+      if (firstArray) {
+        newsItems = firstArray;
+      }
+    }
+
+    if (newsItems.length === 0) {
+      console.error(
+        "[DISCOVER] Parsed Object Structure:",
+        JSON.stringify(parsedResponse, null, 2)
+      );
+      throw new Error("Could not extract news array from LLM response");
     }
 
     // Update cache
@@ -168,17 +239,14 @@ IMPORTANT: Return ONLY the JSON array, no additional text or markdown formatting
       title: item.title || "Untitled",
       summary: item.summary || "",
       source: item.source || "Unknown",
-      imageUrl:
-        item.imageUrl || `https://source.unsplash.com/800x600/?technology`,
+      imageUrl: item.imageUrl || "https://placehold.co/800x600?text=Tech+News",
       category: item.category || "Technology",
       publishedAt: item.publishedAt || new Date().toISOString(),
     }));
     newsCache.lastUpdated = new Date();
     newsCache.isLoading = false;
 
-    // Save to file for persistence
     saveCacheToFile();
-
     console.log(
       "[DISCOVER] Successfully fetched and cached",
       newsCache.data.length,
@@ -186,7 +254,7 @@ IMPORTANT: Return ONLY the JSON array, no additional text or markdown formatting
     );
     return newsCache.data;
   } catch (error) {
-    console.error("[DISCOVER] Error fetching news from LLM:", error.message);
+    console.error("[DISCOVER] Error fetching news:", error.message);
     newsCache.isLoading = false;
     throw error;
   }
