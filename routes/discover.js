@@ -73,6 +73,109 @@ function saveCacheToFile() {
 
 const axios = require("axios");
 
+// Category-based fallback images (high-quality Unsplash images)
+const CATEGORY_FALLBACK_IMAGES = {
+  AI: "https://images.unsplash.com/photo-1677442136019-21780ecad995?w=800&h=600&fit=crop",
+  Software:
+    "https://images.unsplash.com/photo-1461749280684-dccba630e2f6?w=800&h=600&fit=crop",
+  Hardware:
+    "https://images.unsplash.com/photo-1518770660439-4636190af475?w=800&h=600&fit=crop",
+  Startups:
+    "https://images.unsplash.com/photo-1559136555-9303baea8ebd?w=800&h=600&fit=crop",
+  Cybersecurity:
+    "https://images.unsplash.com/photo-1550751827-4bd374c3f58b?w=800&h=600&fit=crop",
+  Cloud:
+    "https://images.unsplash.com/photo-1544197150-b99a580bb7a8?w=800&h=600&fit=crop",
+  Mobile:
+    "https://images.unsplash.com/photo-1512941937669-90a1b58e7e9c?w=800&h=600&fit=crop",
+  Gaming:
+    "https://images.unsplash.com/photo-1538481199705-c710c4e965fc?w=800&h=600&fit=crop",
+  Science:
+    "https://images.unsplash.com/photo-1507413245164-6160d8298b31?w=800&h=600&fit=crop",
+  Business:
+    "https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=800&h=600&fit=crop",
+  Technology:
+    "https://images.unsplash.com/photo-1519389950473-47ba0277781c?w=800&h=600&fit=crop",
+  default:
+    "https://images.unsplash.com/photo-1519389950473-47ba0277781c?w=800&h=600&fit=crop",
+};
+
+// Validate if a URL is a valid image URL
+function isValidImageUrl(url) {
+  if (!url || typeof url !== "string") return false;
+
+  // Must start with http/https
+  if (!url.startsWith("http://") && !url.startsWith("https://")) return false;
+
+  // Reject placeholder URLs
+  if (url.includes("placehold") || url.includes("placeholder")) return false;
+
+  // Reject obviously fake/generic URLs
+  if (url.includes("example.com") || url.includes("test.com")) return false;
+
+  // Reject data URLs (too long, not real images)
+  if (url.startsWith("data:")) return false;
+
+  // Reject very short URLs (likely invalid)
+  if (url.length < 20) return false;
+
+  // Check for common image extensions or image hosting domains
+  const imageExtensions = [
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".bmp",
+  ];
+  const imageHostDomains = [
+    "images.unsplash.com",
+    "cdn.",
+    "img.",
+    "image.",
+    "media.",
+    "static.",
+    "assets.",
+    "photos.",
+    "i.imgur.com",
+    "pbs.twimg.com",
+    "techcrunch.com",
+    "theverge.com",
+    "wired.com",
+    "arstechnica.com",
+    "cnet.com",
+    "zdnet.com",
+    "engadget.com",
+    "mashable.com",
+    "cloudfront.net",
+    "amazonaws.com",
+    "googleusercontent.com",
+  ];
+
+  const hasImageExtension = imageExtensions.some((ext) =>
+    url.toLowerCase().includes(ext)
+  );
+  const isFromImageHost = imageHostDomains.some((domain) =>
+    url.toLowerCase().includes(domain)
+  );
+
+  return hasImageExtension || isFromImageHost;
+}
+
+// Get fallback image based on category
+function getFallbackImage(category) {
+  return CATEGORY_FALLBACK_IMAGES[category] || CATEGORY_FALLBACK_IMAGES.default;
+}
+
+// Validate and fix image URL, with category fallback
+function validateAndFixImageUrl(url, category) {
+  if (isValidImageUrl(url)) {
+    return url;
+  }
+  return getFallbackImage(category);
+}
+
 // Perform web search via Tavily
 async function performWebSearch(query) {
   console.log("[DISCOVER] Starting web search for query:", query);
@@ -109,9 +212,36 @@ async function performWebSearch(query) {
       "images"
     );
 
+    // Extract and validate images from results
+    const extractedImages = [];
+
+    // Get images from the images array
+    if (data.images && Array.isArray(data.images)) {
+      data.images.forEach((img) => {
+        const imgUrl = typeof img === "string" ? img : img?.url;
+        if (isValidImageUrl(imgUrl)) {
+          extractedImages.push(imgUrl);
+        }
+      });
+    }
+
+    // Also extract images from result items
+    if (data.results && Array.isArray(data.results)) {
+      data.results.forEach((result) => {
+        if (result.image && isValidImageUrl(result.image)) {
+          extractedImages.push(result.image);
+        }
+        if (result.thumbnail && isValidImageUrl(result.thumbnail)) {
+          extractedImages.push(result.thumbnail);
+        }
+      });
+    }
+
+    console.log(`[DISCOVER] Extracted ${extractedImages.length} valid images`);
+
     return {
       results: data.results || [],
-      images: data.images || [],
+      images: extractedImages,
     };
   } catch (err) {
     console.error("[DISCOVER] ❌ Web search failed:", err.message);
@@ -169,36 +299,61 @@ async function parseNewsWithRetry(searchData, today, maxRetries = 3) {
     try {
       console.log(`[DISCOVER] Parsing attempt ${attempt}/${maxRetries}...`);
 
+      // Create a mapping of images to help LLM assign them
+      const imageList =
+        searchData.images.length > 0
+          ? searchData.images.map((img, i) => `${i + 1}. ${img}`).join("\n")
+          : "No validated images available - use SKIP_IMAGE as placeholder";
+
       const prompt = `You are a tech news curator. I have performed a web search for today's top tech news (${today}).
+
 Here are the search results:
-${JSON.stringify(searchData.results, null, 2)}
+${JSON.stringify(
+  searchData.results.map((r) => ({
+    title: r.title,
+    url: r.url,
+    content: r.content?.substring(0, 300),
+    image: r.image || null,
+  })),
+  null,
+  2
+)}
 
-Here are some related images found:
-${JSON.stringify(searchData.images, null, 2)}
+Here are VALIDATED image URLs you can use (these are confirmed to be real, working images):
+${imageList}
 
-Your task is to curate a list of the top ${targetCount} most important and trending technology news stories based on these results.
+Your task is to curate a list of the top ${targetCount} most important and trending technology news stories.
 
-For each news item, provide:
-1. A compelling headline/title
-2. A brief summary (2-3 sentences)
-3. The source name (e.g., TechCrunch, The Verge, etc. - derive from the search result URL or title if possible)
-4. A relevant image URL. 
-   - PRIORITY: Use a valid image URL from the 'images' list provided above if it matches the news topic.
-   - SECONDARY: If the search result item itself has an image URL, use that.
-   - FALLBACK: If no real image is available, use a placeholder: https://placehold.co/800x600?text=Tech+News
-5. A category (AI, Software, Hardware, Startups, Cybersecurity, Cloud, Mobile, Gaming, Science, Business)
+CRITICAL IMAGE RULES:
+1. ONLY use image URLs from the "VALIDATED image URLs" list above OR from the search result's "image" field if present
+2. DO NOT invent, guess, or fabricate any image URLs
+3. DO NOT use placeholder URLs like placehold.co or placeholder.com
+4. If you cannot find a real image for a news item, set imageUrl to "SKIP_IMAGE" (we will replace it with a category-appropriate image later)
+5. Each image should only be used ONCE across all news items
 
-Return the response as a valid JSON array with exactly ${targetCount} objects (or fewer if not enough unique stories found, but aim for ${targetCount}).
-Each object must have:
-- "id": "news-1", "news-2", etc.
-- "title"
-- "summary"
-- "source"
-- "imageUrl"
-- "category"
-- "publishedAt": "${new Date().toISOString()}"
+For each news item provide:
+- A compelling headline/title
+- A brief summary (2-3 sentences)  
+- The source name (derive from URL domain)
+- A REAL image URL from the validated list, or "SKIP_IMAGE" if none available
+- A category: AI, Software, Hardware, Startups, Cybersecurity, Cloud, Mobile, Gaming, Science, or Business
 
-IMPORTANT: Return ONLY the JSON array. Make sure all ${targetCount} items are UNIQUE with different headlines.`;
+Return as a JSON object with a "news" array containing ${targetCount} objects:
+{
+  "news": [
+    {
+      "id": "news-1",
+      "title": "...",
+      "summary": "...",
+      "source": "...",
+      "imageUrl": "<real URL from list or SKIP_IMAGE>",
+      "category": "...",
+      "publishedAt": "${new Date().toISOString()}"
+    }
+  ]
+}
+
+IMPORTANT: Make sure all ${targetCount} items are UNIQUE. Never fabricate image URLs.`;
 
       const response = await openai.chat.completions.create({
         model: "gpt-4o",
@@ -330,17 +485,36 @@ async function fetchTechNewsFromLLM() {
         // Step 2: Process with LLM (with retry)
         const newsItems = await parseNewsWithRetry(searchData, today, 3);
 
-        // Step 3: Normalize and add to collection
-        const normalizedItems = newsItems.map((item, index) => ({
-          id: item.id || `news-${allNewsItems.length + index + 1}`,
-          title: item.title || "Untitled",
-          summary: item.summary || "",
-          source: item.source || "Unknown",
-          imageUrl:
-            item.imageUrl || "https://placehold.co/800x600?text=Tech+News",
-          category: item.category || "Technology",
-          publishedAt: item.publishedAt || new Date().toISOString(),
-        }));
+        // Step 3: Normalize and add to collection with image validation
+        const normalizedItems = newsItems.map((item, index) => {
+          const category = item.category || "Technology";
+          let imageUrl = item.imageUrl;
+
+          // Replace SKIP_IMAGE or invalid URLs with category fallback
+          if (
+            !imageUrl ||
+            imageUrl === "SKIP_IMAGE" ||
+            !isValidImageUrl(imageUrl)
+          ) {
+            imageUrl = getFallbackImage(category);
+            console.log(
+              `[DISCOVER] Using fallback image for: ${item.title?.substring(
+                0,
+                50
+              )}...`
+            );
+          }
+
+          return {
+            id: item.id || `news-${allNewsItems.length + index + 1}`,
+            title: item.title || "Untitled",
+            summary: item.summary || "",
+            source: item.source || "Unknown",
+            imageUrl: imageUrl,
+            category: category,
+            publishedAt: item.publishedAt || new Date().toISOString(),
+          };
+        });
 
         allNewsItems = [...allNewsItems, ...normalizedItems];
 
