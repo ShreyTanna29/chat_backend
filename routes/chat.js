@@ -214,6 +214,8 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     const conversationId = req.body.conversationId; // Optional: continue existing conversation
     const thinkMode =
       req.body.thinkMode === "true" || req.body.thinkMode === true; // Optional: use GPT-5 for advanced reasoning
+    const researchMode =
+      req.body.researchMode === "true" || req.body.researchMode === true; // Optional: comprehensive web research mode
     const spaceId = req.body.spaceId || null; // Optional: run within a Space
 
     console.log("[STREAM] Request Parameters:");
@@ -242,6 +244,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     }
     console.log("  - Conversation ID:", conversationId || "New conversation");
     console.log("  - Think Mode:", thinkMode);
+    console.log("  - Research Mode:", researchMode);
     console.log("  - Space ID:", spaceId || "None");
 
     // Validate document type if provided
@@ -261,8 +264,17 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     }
 
     // Use GPT-5-nano for better rate limits with function calling for web search
-    let model = thinkMode ? "gpt-5.2-2025-12-11" : "gpt-5-mini-2025-08-07";
+    // Research mode uses the advanced model for comprehensive research
+    let model =
+      thinkMode || researchMode
+        ? "gpt-5.2-2025-12-11"
+        : "gpt-5-mini-2025-08-07";
     console.log("[STREAM] Model selected:", model);
+    if (researchMode) {
+      console.log(
+        "[STREAM] Research mode active - will force comprehensive web search"
+      );
+    }
 
     if (!prompt && !imageFile && !documentFile) {
       console.log(
@@ -409,12 +421,23 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       messages.push({ role: "system", content: space.defaultPrompt });
       console.log("[STREAM] Added space default prompt");
     }
-    messages.push({
-      role: "system",
-      content:
-        "You are a helpful AI assistant with web search and image generation capabilities. IMPORTANT: When the user asks about current events, news, today's information, real-time data, recent updates, or anything that requires up-to-date information, you MUST use the web_search function to get accurate, current information. Always prefer using web search for questions about 'today', 'now', 'current', 'latest', 'recent', or 'what's happening'. When the user asks to create, generate, draw, or make an image, picture, or artwork, use the generate_image function with a detailed, descriptive prompt. If an image is provided, analyze it and answer the user's question based on both the image and the prompt. If a document is provided, analyze its content and answer based on the document, the prompt, and any other context.",
-    });
-    console.log("[STREAM] Added system prompt with tool instructions");
+
+    // Use different system prompts based on mode
+    if (researchMode) {
+      messages.push({
+        role: "system",
+        content:
+          "You are an advanced research assistant with comprehensive web search capabilities. Your primary function is to conduct thorough, in-depth research on any topic the user asks about. IMPORTANT INSTRUCTIONS FOR RESEARCH MODE:\n\n1. ALWAYS use the web_search function to gather information - this is mandatory for every query.\n2. Perform MULTIPLE web searches with different query variations to get comprehensive coverage of the topic.\n3. Synthesize information from multiple sources to provide well-rounded, accurate answers.\n4. Include relevant sources and citations in your responses.\n5. Look for the most recent and authoritative information available.\n6. If the topic is complex, break it down and research each aspect separately.\n7. Provide detailed, well-structured responses with clear sections and bullet points where appropriate.\n8. Always acknowledge the date/time context of the information you find.\n\nYour goal is to be the most thorough research assistant possible, leaving no stone unturned in finding accurate, up-to-date information.",
+      });
+      console.log("[STREAM] Added RESEARCH MODE system prompt");
+    } else {
+      messages.push({
+        role: "system",
+        content:
+          "You are a helpful AI assistant with web search and image generation capabilities. IMPORTANT: When the user asks about current events, news, today's information, real-time data, recent updates, or anything that requires up-to-date information, you MUST use the web_search function to get accurate, current information. Always prefer using web search for questions about 'today', 'now', 'current', 'latest', 'recent', or 'what's happening'. When the user asks to create, generate, draw, or make an image, picture, or artwork, use the generate_image function with a detailed, descriptive prompt. If an image is provided, analyze it and answer the user's question based on both the image and the prompt. If a document is provided, analyze its content and answer based on the document, the prompt, and any other context.",
+      });
+      console.log("[STREAM] Added system prompt with tool instructions");
+    }
 
     // Add conversation history if exists
     if (conversation.messages && conversation.messages.length > 0) {
@@ -563,9 +586,15 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         needsImageGeneration
       );
 
-      // Determine tool choice based on query content
-      const toolChoice = needsRealTimeData ? "required" : "auto";
-      console.log("[STREAM] Tool choice strategy:", toolChoice);
+      // Determine tool choice based on query content and mode
+      // Research mode ALWAYS forces web search
+      const toolChoice =
+        researchMode || needsRealTimeData ? "required" : "auto";
+      console.log(
+        "[STREAM] Tool choice strategy:",
+        toolChoice,
+        researchMode ? "(forced by research mode)" : ""
+      );
 
       // Always enable web search for real-time data
       console.log(
