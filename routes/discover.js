@@ -3,6 +3,12 @@ const OpenAI = require("openai");
 const cron = require("node-cron");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+const auth = require("../middleware/auth");
+const User = require("../models/User");
+const cron = require("node-cron");
+const fs = require("fs");
+const path = require("path");
 
 const router = express.Router();
 
@@ -21,11 +27,30 @@ const CACHE_FILE_PATH = path.join(
 const CACHE_DIR = path.join(__dirname, "..", "data");
 
 // In-memory cache
+// In-memory cache
+// Structure: { "cacheKey": { data: [], lastUpdated: Date, isLoading: boolean } }
 let newsCache = {
-  data: [],
-  lastUpdated: null,
-  isLoading: false,
+  default: {
+    data: [],
+    lastUpdated: null,
+    isLoading: false,
+  },
 };
+
+// Generate cache key from preferences
+function getCacheKey(countries = [], categories = []) {
+  if (
+    (!countries || countries.length === 0) &&
+    (!categories || categories.length === 0)
+  ) {
+    return "default";
+  }
+  const str = JSON.stringify({
+    countries: countries ? countries.sort() : [],
+    categories: categories ? categories.sort() : [],
+  });
+  return crypto.createHash("md5").update(str).digest("hex");
+}
 
 // Ensure data directory exists
 function ensureDataDir() {
@@ -41,14 +66,30 @@ function loadCacheFromFile() {
     if (fs.existsSync(CACHE_FILE_PATH)) {
       const fileContent = fs.readFileSync(CACHE_FILE_PATH, "utf-8");
       const parsed = JSON.parse(fileContent);
-      newsCache = {
-        data: parsed.data || [],
-        lastUpdated: parsed.lastUpdated ? new Date(parsed.lastUpdated) : null,
-        isLoading: false,
-      };
+      // Migrate old cache format if needed
+      if (parsed.data && Array.isArray(parsed.data)) {
+        newsCache = {
+          default: {
+            data: parsed.data,
+            lastUpdated: parsed.lastUpdated
+              ? new Date(parsed.lastUpdated)
+              : null,
+            isLoading: false,
+          },
+        };
+      } else {
+        // Load new format, converting date strings back to Date objects
+        newsCache = parsed;
+        for (const key in newsCache) {
+          if (newsCache[key].lastUpdated) {
+            newsCache[key].lastUpdated = new Date(newsCache[key].lastUpdated);
+          }
+          newsCache[key].isLoading = false; // Reset loading state on restart
+        }
+      }
       console.log(
-        "[DISCOVER] Cache loaded from file. Items:",
-        newsCache.data.length
+        "[DISCOVER] Cache loaded from file. Keys:",
+        Object.keys(newsCache).length
       );
     }
   } catch (error) {
@@ -60,10 +101,13 @@ function loadCacheFromFile() {
 function saveCacheToFile() {
   try {
     ensureDataDir();
-    const cacheData = {
-      data: newsCache.data,
-      lastUpdated: newsCache.lastUpdated?.toISOString() || null,
-    };
+    const cacheData = {};
+    for (const key in newsCache) {
+      cacheData[key] = {
+        data: newsCache[key].data,
+        lastUpdated: newsCache[key].lastUpdated?.toISOString() || null,
+      };
+    }
     fs.writeFileSync(CACHE_FILE_PATH, JSON.stringify(cacheData, null, 2));
     console.log("[DISCOVER] Cache saved to file");
   } catch (error) {
@@ -292,7 +336,13 @@ function removeDuplicateNews(newsItems) {
 }
 
 // Helper function to parse LLM response with retry
-async function parseNewsWithRetry(searchData, today, maxRetries = 3) {
+async function parseNewsWithRetry(
+  searchData,
+  today,
+  countries = [],
+  categories = [],
+  maxRetries = 3
+) {
   const targetCount = 20;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -305,7 +355,17 @@ async function parseNewsWithRetry(searchData, today, maxRetries = 3) {
           ? searchData.images.map((img, i) => `${i + 1}. ${img}`).join("\n")
           : "No validated images available - use SKIP_IMAGE as placeholder";
 
+      const countryText =
+        countries && countries.length > 0
+          ? `specific to ${countries.join(", ")}`
+          : "global";
+      const categoryText =
+        categories && categories.length > 0
+          ? `focused on ${categories.join(", ")}`
+          : "covering all tech sectors";
+
       const prompt = `You are a tech news curator. I have performed a web search for today's top tech news (${today}).
+The user is interested in news ${countryText} and ${categoryText}.
 
 Here are the search results:
 ${JSON.stringify(
@@ -322,7 +382,7 @@ ${JSON.stringify(
 Here are VALIDATED image URLs you can use (these are confirmed to be real, working images):
 ${imageList}
 
-Your task is to curate a list of the top ${targetCount} most important and trending technology news stories.
+Your task is to curate a list of the top ${targetCount} most important and trending technology news stories that match the user's preferences (${countryText}, ${categoryText}).
 
 CRITICAL IMAGE RULES:
 1. ONLY use image URLs from the "VALIDATED image URLs" list above OR from the search result's "image" field if present
@@ -441,9 +501,23 @@ IMPORTANT: Make sure all ${targetCount} items are UNIQUE. Never fabricate image 
 }
 
 // Fetch tech news using Web Search + LLM with retry and deduplication
-async function fetchTechNewsFromLLM() {
-  console.log("[DISCOVER] Fetching tech news with Web Search...");
-  newsCache.isLoading = true;
+// Fetch tech news using Web Search + LLM with retry and deduplication
+async function fetchTechNewsFromLLM(countries = [], categories = []) {
+  const cacheKey = getCacheKey(countries, categories);
+
+  // Initialize cache entry if not exists
+  if (!newsCache[cacheKey]) {
+    newsCache[cacheKey] = {
+      data: [],
+      lastUpdated: null,
+      isLoading: false,
+    };
+  }
+
+  console.log(
+    `[DISCOVER] Fetching tech news for key: ${cacheKey} (Countries: ${countries}, Categories: ${categories})...`
+  );
+  newsCache[cacheKey].isLoading = true;
 
   const TARGET_NEWS_COUNT = 20;
   const MAX_FETCH_ROUNDS = 3;
@@ -457,10 +531,16 @@ async function fetchTechNewsFromLLM() {
     });
 
     // Different search queries to get diverse results
+    // Different search queries to get diverse results
+    const countryStr =
+      countries && countries.length > 0 ? `in ${countries.join(" ")}` : "";
+    const categoryStr =
+      categories && categories.length > 0 ? categories.join(" ") : "technology";
+
     const searchQueries = [
-      `top technology news headlines and stories ${today}`,
-      `latest tech industry news AI software ${today}`,
-      `breaking technology startup cybersecurity news ${today}`,
+      `top ${categoryStr} news headlines and stories ${countryStr} ${today}`,
+      `latest ${categoryStr} industry news ${countryStr} ${today}`,
+      `breaking ${categoryStr} news ${countryStr} ${today}`,
     ];
 
     let allNewsItems = [];
@@ -490,7 +570,13 @@ async function fetchTechNewsFromLLM() {
         }
 
         // Step 2: Process with LLM (with retry)
-        const newsItems = await parseNewsWithRetry(searchData, today, 3);
+        const newsItems = await parseNewsWithRetry(
+          searchData,
+          today,
+          countries,
+          categories,
+          3
+        );
 
         // Step 3: Normalize and add to collection with image validation
         const normalizedItems = newsItems.map((item, index) => {
@@ -571,31 +657,36 @@ async function fetchTechNewsFromLLM() {
     }
 
     // Update cache
-    newsCache.data = allNewsItems;
-    newsCache.lastUpdated = new Date();
-    newsCache.isLoading = false;
+    newsCache[cacheKey].data = allNewsItems;
+    newsCache[cacheKey].lastUpdated = new Date();
+    newsCache[cacheKey].isLoading = false;
 
     saveCacheToFile();
     console.log(
       "[DISCOVER] Successfully fetched and cached",
-      newsCache.data.length,
-      "unique news items"
+      newsCache[cacheKey].data.length,
+      "unique news items for key:",
+      cacheKey
     );
-    return newsCache.data;
+    return newsCache[cacheKey].data;
   } catch (error) {
     console.error("[DISCOVER] Error fetching news:", error.message);
-    newsCache.isLoading = false;
+    if (newsCache[cacheKey]) {
+      newsCache[cacheKey].isLoading = false;
+    }
     throw error;
   }
 }
 
 // Check if cache needs refresh (older than 24 hours or empty)
-function isCacheStale() {
-  if (!newsCache.lastUpdated || newsCache.data.length === 0) {
+// Check if cache needs refresh (older than 24 hours or empty)
+function isCacheStale(key = "default") {
+  const cacheEntry = newsCache[key];
+  if (!cacheEntry || !cacheEntry.lastUpdated || cacheEntry.data.length === 0) {
     return true;
   }
   const now = new Date();
-  const lastUpdate = new Date(newsCache.lastUpdated);
+  const lastUpdate = new Date(cacheEntry.lastUpdated);
   const hoursDiff = (now - lastUpdate) / (1000 * 60 * 60);
   return hoursDiff >= 24;
 }
@@ -603,25 +694,29 @@ function isCacheStale() {
 // @route   GET /api/discover
 // @desc    Get cached tech news
 // @access  Public
+// @route   GET /api/discover
+// @desc    Get cached tech news (default/global)
+// @access  Public
 router.get("/", async (req, res) => {
   try {
-    console.log("[DISCOVER] GET request received");
+    console.log("[DISCOVER] GET request received (default)");
+    const cacheKey = "default";
 
     // If cache is empty and stale, fetch new data
-    if (isCacheStale() && !newsCache.isLoading) {
+    if (isCacheStale(cacheKey) && !newsCache[cacheKey]?.isLoading) {
       console.log("[DISCOVER] Cache is stale or empty, fetching fresh data...");
       try {
-        await fetchTechNewsFromLLM();
+        await fetchTechNewsFromLLM([], []);
       } catch (fetchError) {
         // If we have old data, return it with a warning
-        if (newsCache.data.length > 0) {
+        if (newsCache[cacheKey]?.data?.length > 0) {
           console.log("[DISCOVER] Using stale cache after fetch failure");
           return res.json({
             success: true,
             message: "Returning cached data (refresh failed)",
-            data: newsCache.data,
-            lastUpdated: newsCache.lastUpdated,
-            count: newsCache.data.length,
+            data: newsCache[cacheKey].data,
+            lastUpdated: newsCache[cacheKey].lastUpdated,
+            count: newsCache[cacheKey].data.length,
           });
         }
         throw fetchError;
@@ -629,29 +724,132 @@ router.get("/", async (req, res) => {
     }
 
     // If currently loading, wait a bit and return what we have
-    if (newsCache.isLoading) {
+    if (newsCache[cacheKey]?.isLoading) {
       console.log("[DISCOVER] News is currently being fetched...");
       return res.json({
         success: true,
         message: "News is being refreshed, please try again shortly",
-        data: newsCache.data,
-        lastUpdated: newsCache.lastUpdated,
-        count: newsCache.data.length,
+        data: newsCache[cacheKey]?.data || [],
+        lastUpdated: newsCache[cacheKey]?.lastUpdated,
+        count: newsCache[cacheKey]?.data?.length || 0,
         isLoading: true,
       });
     }
 
     res.json({
       success: true,
-      data: newsCache.data,
-      lastUpdated: newsCache.lastUpdated,
-      count: newsCache.data.length,
+      data: newsCache[cacheKey]?.data || [],
+      lastUpdated: newsCache[cacheKey]?.lastUpdated,
+      count: newsCache[cacheKey]?.data?.length || 0,
     });
   } catch (error) {
     console.error("[DISCOVER] Error:", error.message);
     res.status(500).json({
       success: false,
       message: "Failed to fetch tech news",
+      error: error.message,
+    });
+  }
+});
+
+// @route   POST /api/discover/preferences
+// @desc    Update user news preferences
+// @access  Private
+router.post("/preferences", auth, async (req, res) => {
+  try {
+    const { countries, categories } = req.body;
+    const userId = req.user.id;
+
+    // Get current preferences
+    const user = await User.findById(userId);
+    let preferences = user.preferences || {};
+
+    // Update news preferences
+    preferences.news = {
+      countries: Array.isArray(countries) ? countries : [],
+      categories: Array.isArray(categories) ? categories : [],
+    };
+
+    // Save updated preferences
+    await User.update(userId, { preferences });
+
+    res.json({
+      success: true,
+      message: "Preferences updated successfully",
+      preferences: preferences.news,
+    });
+  } catch (error) {
+    console.error("[DISCOVER] Error updating preferences:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update preferences",
+      error: error.message,
+    });
+  }
+});
+
+// @route   GET /api/discover/custom
+// @desc    Get customized news based on user preferences
+// @access  Private
+router.get("/custom", auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await User.findById(userId);
+    const preferences = user.preferences?.news || {};
+    const { countries = [], categories = [] } = preferences;
+
+    console.log(
+      `[DISCOVER] GET custom request for user ${userId}. Countries: ${countries}, Categories: ${categories}`
+    );
+
+    const cacheKey = getCacheKey(countries, categories);
+
+    // Initialize cache entry if needed
+    if (!newsCache[cacheKey]) {
+      newsCache[cacheKey] = {
+        data: [],
+        lastUpdated: null,
+        isLoading: false,
+      };
+    }
+
+    // Check if we need to fetch
+    if (isCacheStale(cacheKey) && !newsCache[cacheKey].isLoading) {
+      console.log(
+        `[DISCOVER] Custom cache stale for key ${cacheKey}, fetching...`
+      );
+      // Don't await this if you want background fetching, but for first load user probably wants to wait
+      // Or we can return empty/stale and let client poll?
+      // For now, let's await it so the user gets data immediately
+      try {
+        await fetchTechNewsFromLLM(countries, categories);
+      } catch (err) {
+        console.error("[DISCOVER] Failed to fetch custom news:", err.message);
+        // Fallback to default if custom fails and we have no data
+        if (newsCache[cacheKey].data.length === 0) {
+          console.log("[DISCOVER] Falling back to default news");
+          return res.json({
+            success: true,
+            message: "Could not fetch custom news, showing default",
+            data: newsCache["default"]?.data || [],
+            isFallback: true,
+          });
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      data: newsCache[cacheKey].data,
+      lastUpdated: newsCache[cacheKey].lastUpdated,
+      count: newsCache[cacheKey].data.length,
+      isLoading: newsCache[cacheKey].isLoading,
+    });
+  } catch (error) {
+    console.error("[DISCOVER] Error fetching custom news:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch custom news",
       error: error.message,
     });
   }
@@ -666,7 +864,11 @@ function initDiscoverCron() {
   cron.schedule("0 6 * * *", async () => {
     console.log("[DISCOVER] Running scheduled daily refresh at 6:00 AM");
     try {
-      await fetchTechNewsFromLLM();
+      // Refresh default news
+      await fetchTechNewsFromLLM([], []);
+
+      // Note: We could also refresh active custom preferences here if we tracked them
+
       console.log("[DISCOVER] Daily refresh completed successfully");
     } catch (error) {
       console.error("[DISCOVER] Daily refresh failed:", error.message);
@@ -675,12 +877,12 @@ function initDiscoverCron() {
 
   console.log("[DISCOVER] Cron job scheduled for 6:00 AM daily");
 
-  // If cache is empty or stale on startup, fetch immediately
-  if (isCacheStale()) {
+  // If cache is empty or stale on startup, fetch immediately (default only)
+  if (isCacheStale("default")) {
     console.log(
       "[DISCOVER] Cache is stale on startup, fetching initial data..."
     );
-    fetchTechNewsFromLLM().catch((error) => {
+    fetchTechNewsFromLLM([], []).catch((error) => {
       console.error("[DISCOVER] Initial fetch failed:", error.message);
     });
   }
