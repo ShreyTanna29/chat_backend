@@ -6,9 +6,6 @@ const path = require("path");
 const crypto = require("crypto");
 const auth = require("../middleware/auth");
 const User = require("../models/User");
-const cron = require("node-cron");
-const fs = require("fs");
-const path = require("path");
 
 const router = express.Router();
 
