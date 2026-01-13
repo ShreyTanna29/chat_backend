@@ -333,7 +333,14 @@ CRITICAL IMAGE RULES:
 
 For each news item provide:
 - A compelling headline/title
-- A brief summary (2-3 sentences)  
+- A COMPREHENSIVE, DETAILED description (400-600 words, approximately 2-3 minutes reading time). The description should:
+  * Provide thorough background and context about the story
+  * Explain the significance and implications of the news
+  * Include relevant technical details where appropriate
+  * Discuss potential impact on the industry, users, or market
+  * Mention any key stakeholders, companies, or individuals involved
+  * Cover different perspectives or reactions if available
+  * Conclude with what this means for the future or next steps
 - The source name (derive from URL domain)
 - A REAL image URL from the validated list, or "SKIP_IMAGE" if none available
 - A category: AI, Software, Hardware, Startups, Cybersecurity, Cloud, Mobile, Gaming, Science, or Business
@@ -344,7 +351,7 @@ Return as a JSON object with a "news" array containing ${targetCount} objects:
     {
       "id": "news-1",
       "title": "...",
-      "summary": "...",
+      "description": "...",
       "source": "...",
       "imageUrl": "<real URL from list or SKIP_IMAGE>",
       "category": "...",
@@ -353,7 +360,7 @@ Return as a JSON object with a "news" array containing ${targetCount} objects:
   ]
 }
 
-IMPORTANT: Make sure all ${targetCount} items are UNIQUE. Never fabricate image URLs.`;
+IMPORTANT: Make sure all ${targetCount} items are UNIQUE. Never fabricate image URLs. Each description MUST be 400-600 words long for a proper 2-3 minute read.`;
 
       const response = await openai.chat.completions.create({
         model: "gpt-4o",
@@ -361,7 +368,7 @@ IMPORTANT: Make sure all ${targetCount} items are UNIQUE. Never fabricate image 
           {
             role: "system",
             content:
-              "You are a tech news curator that returns responses in valid JSON format only. Always aim to return exactly 20 unique news items.",
+              "You are a tech news curator that returns responses in valid JSON format only. Always aim to return exactly 20 unique news items with comprehensive, detailed descriptions (400-600 words each).",
           },
           {
             role: "user",
@@ -369,7 +376,7 @@ IMPORTANT: Make sure all ${targetCount} items are UNIQUE. Never fabricate image 
           },
         ],
         temperature: 0.5,
-        max_tokens: 5000,
+        max_tokens: 15000,
         response_format: { type: "json_object" },
       });
 
@@ -508,7 +515,7 @@ async function fetchTechNewsFromLLM() {
           return {
             id: item.id || `news-${allNewsItems.length + index + 1}`,
             title: item.title || "Untitled",
-            summary: item.summary || "",
+            description: item.description || item.summary || "",
             source: item.source || "Unknown",
             imageUrl: imageUrl,
             category: category,
