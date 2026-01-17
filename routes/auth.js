@@ -19,7 +19,7 @@ const appleSignin = require("apple-signin-auth");
 const crypto = require("crypto");
 const sendEmail = require("../utils/email");
 
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID_WEB);
 
 const router = express.Router();
 
@@ -164,7 +164,11 @@ router.post("/google", googleAuthValidation, async (req, res) => {
     // Verify Google token
     const ticket = await client.verifyIdToken({
       idToken: token,
-      audience: process.env.GOOGLE_CLIENT_ID,
+      audience: [
+        process.env.GOOGLE_CLIENT_ID_WEB,
+        process.env.GOOGLE_CLIENT_ID_IOS,
+        process.env.GOOGLE_CLIENT_ID_ANDROID,
+      ],
     });
     const payload = ticket.getPayload();
     const { email, name, sub: googleId, picture: avatar } = payload;
@@ -238,7 +242,10 @@ router.post("/apple", appleAuthValidation, async (req, res) => {
 
     // Verify Apple token
     const { email, sub: appleId } = await appleSignin.verifyIdToken(idToken, {
-      // Optional: audience: process.env.APPLE_CLIENT_ID,
+      audience: [
+        process.env.APPLE_CLIENT_ID_WEB,
+        process.env.APPLE_CLIENT_ID_MOBILE,
+      ],
       ignoreExpiration: true, // Sometimes useful for testing, but be careful in prod
     });
 
