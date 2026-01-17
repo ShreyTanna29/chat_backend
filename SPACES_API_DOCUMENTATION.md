@@ -4,7 +4,7 @@
 
 Spaces allow users to organize conversations into separate workspaces. Each space can have its own default prompt/instructions that apply to all conversations within that space.
 
-**Base URL:** `http://3.138.200.50:3000/api/chat`
+**Base URL:** `https://eruditeaic.com/api/chat`
 
 **Authentication:** All endpoints require Bearer token authentication.
 

@@ -1,5 +1,5 @@
-const bcrypt = require('bcryptjs');
-const prisma = require('../config/database');
+const bcrypt = require("bcryptjs");
+const prisma = require("../config/database");
 
 class User {
   // Hash password before creating user
@@ -19,22 +19,25 @@ class User {
 
   // Create user
   static async create(userData) {
-    const hashedPassword = await this.hashPassword(userData.password);
-    
+    let hashedPassword = null;
+    if (userData.password) {
+      hashedPassword = await this.hashPassword(userData.password);
+    }
+
     return await prisma.user.create({
       data: {
         ...userData,
         email: userData.email.toLowerCase(),
         name: userData.name.trim(),
         password: hashedPassword,
-      }
+      },
     });
   }
 
   // Find user by ID
   static async findById(id, options = {}) {
     const { excludePassword = true } = options;
-    
+
     return await prisma.user.findUnique({
       where: { id },
       select: {
@@ -48,15 +51,15 @@ class User {
         preferences: true,
         createdAt: true,
         updatedAt: true,
-        password: !excludePassword
-      }
+        password: !excludePassword,
+      },
     });
   }
 
   // Find user by email
   static async findByEmail(email, options = {}) {
     const { includePassword = false } = options;
-    
+
     return await prisma.user.findUnique({
       where: { email: email.toLowerCase() },
       select: {
@@ -66,12 +69,33 @@ class User {
         avatar: true,
         isVerified: true,
         refreshToken: true,
+        googleId: true,
         searchHistory: true,
         preferences: true,
         createdAt: true,
         updatedAt: true,
-        password: includePassword
-      }
+        password: includePassword,
+      },
+    });
+  }
+
+  // Find user by Google ID
+  static async findByGoogleId(googleId) {
+    return await prisma.user.findUnique({
+      where: { googleId },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        avatar: true,
+        isVerified: true,
+        refreshToken: true,
+        googleId: true,
+        searchHistory: true,
+        preferences: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
   }
 
@@ -104,8 +128,8 @@ class User {
         searchHistory: true,
         preferences: true,
         createdAt: true,
-        updatedAt: true
-      }
+        updatedAt: true,
+      },
     });
   }
 
@@ -113,19 +137,19 @@ class User {
   static async addToSearchHistory(id, query) {
     const user = await prisma.user.findUnique({
       where: { id },
-      select: { searchHistory: true }
+      select: { searchHistory: true },
     });
 
     if (!user) {
-      throw new Error('User not found');
+      throw new Error("User not found");
     }
 
     const history = Array.isArray(user.searchHistory) ? user.searchHistory : [];
-    
+
     // Add new query to the beginning
     history.unshift({
       query,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
 
     // Keep only last 50 searches
@@ -135,7 +159,7 @@ class User {
 
     return await prisma.user.update({
       where: { id },
-      data: { searchHistory: history }
+      data: { searchHistory: history },
     });
   }
 
@@ -143,7 +167,7 @@ class User {
   static async clearSearchHistory(id) {
     return await prisma.user.update({
       where: { id },
-      data: { searchHistory: [] }
+      data: { searchHistory: [] },
     });
   }
 
@@ -151,21 +175,21 @@ class User {
   static async updateRefreshToken(id, refreshToken) {
     return await prisma.user.update({
       where: { id },
-      data: { refreshToken }
+      data: { refreshToken },
     });
   }
 
   // Delete user
   static async delete(id) {
     return await prisma.user.delete({
-      where: { id }
+      where: { id },
     });
   }
 
   // Get all users (admin function)
   static async findMany(options = {}) {
     const { skip = 0, take = 10 } = options;
-    
+
     return await prisma.user.findMany({
       skip,
       take,
@@ -178,8 +202,8 @@ class User {
         searchHistory: true,
         preferences: true,
         createdAt: true,
-        updatedAt: true
-      }
+        updatedAt: true,
+      },
     });
   }
 

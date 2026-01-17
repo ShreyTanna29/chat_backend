@@ -32,8 +32,13 @@ const refreshTokenValidation = [
   body("refreshToken").notEmpty().withMessage("Refresh token is required"),
 ];
 
+const googleAuthValidation = [
+  body("token").notEmpty().withMessage("Google ID token is required"),
+];
+
 module.exports = {
   signupValidation,
   loginValidation,
   refreshTokenValidation,
+  googleAuthValidation,
 };

@@ -11,7 +11,11 @@ const {
   signupValidation,
   loginValidation,
   refreshTokenValidation,
+  googleAuthValidation,
 } = require("../utils/validation");
+const { OAuth2Client } = require("google-auth-library");
+
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const router = express.Router();
 
@@ -132,6 +136,81 @@ router.post("/login", loginValidation, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Internal server error",
+    });
+  }
+});
+
+// @route   POST /api/auth/google
+// @desc    Google login/signup
+// @access  Public
+router.post("/google", googleAuthValidation, async (req, res) => {
+  try {
+    // Check for validation errors
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: errors.array(),
+      });
+    }
+
+    const { token } = req.body;
+
+    // Verify Google token
+    const ticket = await client.verifyIdToken({
+      idToken: token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    const { email, name, sub: googleId, picture: avatar } = payload;
+
+    // Check if user exists by Google ID
+    let user = await User.findByGoogleId(googleId);
+
+    if (!user) {
+      // Check if user exists by email
+      user = await User.findByEmail(email);
+
+      if (user) {
+        // Link Google ID to existing user
+        user = await User.update(user.id, {
+          googleId,
+          avatar: user.avatar || avatar,
+        });
+      } else {
+        // Create new user
+        user = await User.create({
+          email,
+          name,
+          googleId,
+          avatar,
+          isVerified: true, // Google emails are verified
+        });
+      }
+    }
+
+    // Generate tokens
+    const accessToken = generateAccessToken(user.id);
+    const refreshToken = generateRefreshToken(user.id);
+
+    // Save refresh token to user
+    await User.updateRefreshToken(user.id, refreshToken);
+
+    res.json({
+      success: true,
+      message: "Google login successful",
+      data: {
+        user,
+        accessToken,
+        refreshToken,
+      },
+    });
+  } catch (error) {
+    console.error("Google auth error:", error);
+    res.status(401).json({
+      success: false,
+      message: "Invalid Google token",
     });
   }
 });
