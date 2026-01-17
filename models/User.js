@@ -70,6 +70,7 @@ class User {
         isVerified: true,
         refreshToken: true,
         googleId: true,
+        appleId: true,
         searchHistory: true,
         preferences: true,
         createdAt: true,
@@ -91,6 +92,27 @@ class User {
         isVerified: true,
         refreshToken: true,
         googleId: true,
+        searchHistory: true,
+        preferences: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+  }
+
+  // Find user by Apple ID
+  static async findByAppleId(appleId) {
+    return await prisma.user.findUnique({
+      where: { appleId },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        avatar: true,
+        isVerified: true,
+        refreshToken: true,
+        googleId: true,
+        appleId: true,
         searchHistory: true,
         preferences: true,
         createdAt: true,

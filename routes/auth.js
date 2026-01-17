@@ -12,8 +12,10 @@ const {
   loginValidation,
   refreshTokenValidation,
   googleAuthValidation,
+  appleAuthValidation,
 } = require("../utils/validation");
 const { OAuth2Client } = require("google-auth-library");
+const appleSignin = require("apple-signin-auth");
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -211,6 +213,81 @@ router.post("/google", googleAuthValidation, async (req, res) => {
     res.status(401).json({
       success: false,
       message: "Invalid Google token",
+    });
+  }
+});
+
+// @route   POST /api/auth/apple
+// @desc    Apple login/signup
+// @access  Public
+router.post("/apple", appleAuthValidation, async (req, res) => {
+  try {
+    // Check for validation errors
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: errors.array(),
+      });
+    }
+
+    const { idToken, name } = req.body;
+
+    // Verify Apple token
+    const { email, sub: appleId } = await appleSignin.verifyIdToken(idToken, {
+      // Optional: audience: process.env.APPLE_CLIENT_ID,
+      ignoreExpiration: true, // Sometimes useful for testing, but be careful in prod
+    });
+
+    // Check if user exists by Apple ID
+    let user = await User.findByAppleId(appleId);
+
+    if (!user) {
+      // Check if user exists by email
+      user = await User.findByEmail(email);
+
+      if (user) {
+        // Link Apple ID to existing user
+        user = await User.update(user.id, { appleId });
+      } else {
+        // Create new user
+        // Note: Apple only sends name on first login. Frontend should send it if available.
+        // If not provided, we might default to "Apple User" or similar if name is missing.
+        const userName = name
+          ? `${name.firstName} ${name.lastName}`.trim()
+          : "Apple User";
+
+        user = await User.create({
+          email,
+          name: userName,
+          appleId,
+          isVerified: true, // Apple emails are verified
+        });
+      }
+    }
+
+    // Generate tokens
+    const accessToken = generateAccessToken(user.id);
+    const refreshToken = generateRefreshToken(user.id);
+
+    // Save refresh token to user
+    await User.updateRefreshToken(user.id, refreshToken);
+
+    res.json({
+      success: true,
+      message: "Apple login successful",
+      data: {
+        user,
+        accessToken,
+        refreshToken,
+      },
+    });
+  } catch (error) {
+    console.error("Apple auth error:", error);
+    res.status(401).json({
+      success: false,
+      message: "Invalid Apple token",
     });
   }
 });

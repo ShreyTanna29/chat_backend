@@ -36,9 +36,14 @@ const googleAuthValidation = [
   body("token").notEmpty().withMessage("Google ID token is required"),
 ];
 
+const appleAuthValidation = [
+  body("idToken").notEmpty().withMessage("Apple ID token is required"),
+];
+
 module.exports = {
   signupValidation,
   loginValidation,
   refreshTokenValidation,
   googleAuthValidation,
+  appleAuthValidation,
 };
