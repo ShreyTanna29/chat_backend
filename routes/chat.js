@@ -12,6 +12,7 @@ const {
   isSupportedDocument,
   SUPPORTED_DOCUMENT_TYPES,
 } = require("../utils/documentParser");
+const { uploadToCloudinary } = require("../utils/cloudinary");
 
 const router = express.Router();
 
@@ -881,6 +882,49 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       // Save messages to database
       console.log("[STREAM] Saving messages to database...");
       try {
+        // Upload files to Cloudinary if present
+        let imageUrl = null;
+        let imagePublicId = null;
+        if (imageFile) {
+          console.log("[STREAM] Uploading image to Cloudinary...");
+          try {
+            const result = await uploadToCloudinary(
+              imageFile.buffer,
+              "perplex/images",
+              "image"
+            );
+            imageUrl = result.secure_url;
+            imagePublicId = result.public_id;
+            console.log("[STREAM] ✓ Image uploaded:", imageUrl);
+          } catch (uploadError) {
+            console.error(
+              "[STREAM] ❌ Image upload failed:",
+              uploadError.message
+            );
+          }
+        }
+
+        let documentUrl = null;
+        let documentPublicId = null;
+        if (documentFile) {
+          console.log("[STREAM] Uploading document to Cloudinary...");
+          try {
+            const result = await uploadToCloudinary(
+              documentFile.buffer,
+              "perplex/documents",
+              "auto"
+            );
+            documentUrl = result.secure_url;
+            documentPublicId = result.public_id;
+            console.log("[STREAM] ✓ Document uploaded:", documentUrl);
+          } catch (uploadError) {
+            console.error(
+              "[STREAM] ❌ Document upload failed:",
+              uploadError.message
+            );
+          }
+        }
+
         // Save user message
         console.log("[STREAM] Saving user message...");
         await Conversation.addMessage(conversation.id, {
@@ -889,10 +933,14 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
           metadata: {
             hasImage: !!imageFile,
             imageType: imageFile?.mimetype,
+            imageUrl,
+            imagePublicId,
             hasDocument: !!documentFile,
             documentName: documentMetadata?.filename,
             documentType: documentMetadata?.mimetype,
             documentSize: documentMetadata?.originalSize,
+            documentUrl,
+            documentPublicId,
           },
         });
         console.log("[STREAM] ✓ User message saved");
@@ -1271,6 +1319,25 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
       } chars, Tokens used: ${completion.usage?.total_tokens || "N/A"}`
     );
 
+    // Upload image to Cloudinary if present
+    let imageUrl = null;
+    let imagePublicId = null;
+    if (imageFile) {
+      console.log("[ASK] Uploading image to Cloudinary...");
+      try {
+        const result = await uploadToCloudinary(
+          imageFile.buffer,
+          "perplex/images",
+          "image"
+        );
+        imageUrl = result.secure_url;
+        imagePublicId = result.public_id;
+        console.log("[ASK] ✓ Image uploaded:", imageUrl);
+      } catch (uploadError) {
+        console.error("[ASK] ❌ Image upload failed:", uploadError.message);
+      }
+    }
+
     // Save messages to database
     try {
       await Conversation.addMessage(conversation.id, {
@@ -1279,6 +1346,8 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
         metadata: {
           hasImage: !!imageFile,
           imageType: imageFile?.mimetype,
+          imageUrl,
+          imagePublicId,
         },
       });
 
