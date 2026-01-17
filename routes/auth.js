@@ -301,6 +301,76 @@ router.post("/apple", appleAuthValidation, async (req, res) => {
   }
 });
 
+// @route   POST /api/auth/apple/callback
+// @desc    Apple login callback (for form_post)
+// @access  Public
+router.post("/apple/callback", async (req, res) => {
+  try {
+    const { id_token, user: userStr } = req.body;
+
+    // Verify Apple token
+    const { email, sub: appleId } = await appleSignin.verifyIdToken(id_token, {
+      audience: [
+        process.env.APPLE_CLIENT_ID_WEB,
+        process.env.APPLE_CLIENT_ID_MOBILE,
+      ],
+      ignoreExpiration: true,
+    });
+
+    // Check if user exists by Apple ID
+    let user = await User.findByAppleId(appleId);
+
+    if (!user) {
+      // Check if user exists by email
+      user = await User.findByEmail(email);
+
+      if (user) {
+        // Link Apple ID to existing user
+        user = await User.update(user.id, { appleId });
+      } else {
+        // Create new user
+        // Apple only sends name on first login in the 'user' field
+        let userName = "Apple User";
+        if (userStr) {
+          try {
+            const userData = JSON.parse(userStr);
+            if (userData.name) {
+              userName =
+                `${userData.name.firstName} ${userData.name.lastName}`.trim();
+            }
+          } catch (e) {
+            console.error("Error parsing user data from Apple:", e);
+          }
+        }
+
+        user = await User.create({
+          email,
+          name: userName,
+          appleId,
+          isVerified: true,
+        });
+      }
+    }
+
+    // Generate tokens
+    const accessToken = generateAccessToken(user.id);
+    const refreshToken = generateRefreshToken(user.id);
+
+    // Save refresh token to user
+    await User.updateRefreshToken(user.id, refreshToken);
+
+    // Redirect to frontend with tokens
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    res.redirect(
+      `${frontendUrl}/auth/callback?accessToken=${accessToken}&refreshToken=${refreshToken}`,
+    );
+  } catch (error) {
+    console.error("Apple callback error:", error);
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    res.redirect(`${frontendUrl}/auth/callback?error=auth_failed`);
+  }
+});
+
 // @route   POST /api/auth/refresh
 // @desc    Refresh access token
 // @access  Public
