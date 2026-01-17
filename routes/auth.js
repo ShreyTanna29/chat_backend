@@ -16,6 +16,8 @@ const {
 } = require("../utils/validation");
 const { OAuth2Client } = require("google-auth-library");
 const appleSignin = require("apple-signin-auth");
+const crypto = require("crypto");
+const sendEmail = require("../utils/email");
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -417,6 +419,108 @@ router.put("/profile", auth, async (req, res) => {
     });
   } catch (error) {
     console.error("Profile update error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
+
+// @route   POST /api/auth/forgot-password
+// @desc    Forgot password
+// @access  Public
+router.post("/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    const user = await User.findByEmail(email);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Generate OTP
+    const resetToken = crypto.randomInt(100000, 999999).toString();
+    // Token expires in 10 minutes
+    const resetPasswordExpires = new Date(Date.now() + 10 * 60 * 1000);
+
+    await User.update(user.id, {
+      resetPasswordToken: resetToken,
+      resetPasswordExpires,
+    });
+
+    const message = `You are receiving this email because you (or someone else) has requested the reset of a password. Please use the following OTP to reset your password: \n\n ${resetToken}`;
+
+    try {
+      await sendEmail({
+        email: user.email,
+        subject: "Password Reset Token",
+        message,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: "Email sent",
+      });
+    } catch (error) {
+      await User.update(user.id, {
+        resetPasswordToken: null,
+        resetPasswordExpires: null,
+      });
+      return res.status(500).json({
+        success: false,
+        message: "Email could not be sent",
+      });
+    }
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
+
+// @route   POST /api/auth/reset-password
+// @desc    Reset password
+// @access  Public
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { email, otp, password } = req.body;
+
+    const user = await User.findByEmail(email, { includeResetToken: true });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    if (
+      user.resetPasswordToken !== otp ||
+      new Date(user.resetPasswordExpires) < Date.now()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired token",
+      });
+    }
+
+    await User.update(user.id, {
+      password,
+      resetPasswordToken: null,
+      resetPasswordExpires: null,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Password updated successfully",
+    });
+  } catch (error) {
+    console.error("Reset password error:", error);
     res.status(500).json({
       success: false,
       message: "Internal server error",

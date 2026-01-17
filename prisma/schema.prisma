@@ -24,6 +24,8 @@ model User {
   avatar        String?
   isVerified    Boolean        @default(false)
   refreshToken  String?
+  resetPasswordToken String?
+  resetPasswordExpires DateTime?
   searchHistory Json[]         @default([])
   preferences   Json           @default("{\"theme\":\"auto\",\"language\":\"en\"}")
   createdAt     DateTime       @default(now())

@@ -58,7 +58,7 @@ class User {
 
   // Find user by email
   static async findByEmail(email, options = {}) {
-    const { includePassword = false } = options;
+    const { includePassword = false, includeResetToken = false } = options;
 
     return await prisma.user.findUnique({
       where: { email: email.toLowerCase() },
@@ -76,6 +76,8 @@ class User {
         createdAt: true,
         updatedAt: true,
         password: includePassword,
+        resetPasswordToken: includeResetToken,
+        resetPasswordExpires: includeResetToken,
       },
     });
   }
