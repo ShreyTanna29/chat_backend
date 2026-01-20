@@ -589,32 +589,30 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     const processChunk = (chunk) => {
       // Adapt to different chunk structures if necessary
       // Standard chat completion chunk: chunk.choices[0].delta
-      // Responses API chunk: might be different, but assuming similar for now or checking properties
+      // Responses API chunk: type="response.output_text.delta", delta="text"
 
-      // DEBUG LOG
-      console.log("[STREAM-DEBUG] Chunk:", JSON.stringify(chunk));
-
-      let delta, reason;
+      let delta = {};
+      let reason = null;
 
       if (chunk.choices && chunk.choices[0]) {
         delta = chunk.choices[0].delta;
         reason = chunk.choices[0].finish_reason;
-      } else if (chunk.output_text !== undefined) {
-        // Hypothetical responses API chunk structure
-        delta = { content: chunk.output_text };
-        reason = chunk.finish_reason;
+      } else if (chunk.type === "response.output_text.delta") {
+        // Responses API text delta
+        delta = { content: chunk.delta };
+      } else if (chunk.type === "response.completed") {
+        // Responses API completion
+        reason = "stop";
+      } else if (
+        chunk.type === "response.output_item.done" &&
+        chunk.item?.type === "function_call"
+      ) {
+        // Handle tool calls if they appear here (future proofing)
       } else {
         // Fallback/Generic
         delta = chunk.delta || {};
         reason = chunk.finish_reason;
       }
-
-      console.log(
-        "[STREAM-DEBUG] Delta:",
-        JSON.stringify(delta),
-        "Reason:",
-        reason,
-      );
 
       // Accumulate tool calls
       if (delta?.tool_calls) {
