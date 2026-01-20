@@ -55,76 +55,7 @@ function toAIErrorResponse(err, fallbackMessage = "AI service error") {
 // Optional web search tool (function-calling) for GPT-5 think mode
 
 // Perform web search via Tavily if configured; otherwise return a helpful message
-async function performWebSearch(query) {
-  console.log("[WEB_SEARCH] Starting web search for query:", query);
-  try {
-    const apiKey = process.env.TAVILY_API_KEY;
-    if (!apiKey) {
-      console.error("[WEB_SEARCH] ❌ TAVILY_API_KEY not configured!");
-      return JSON.stringify({
-        error: "Web search not configured",
-        hint: "Set TAVILY_API_KEY in environment to enable web search",
-        query,
-      });
-    }
-
-    console.log("[WEB_SEARCH] Making request to Tavily API...");
-    const resp = await fetch("https://api.tavily.com/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_key: apiKey,
-        query,
-        include_answer: true,
-        max_results: 5,
-        search_depth: "advanced",
-      }),
-    });
-
-    if (!resp.ok) {
-      console.error(
-        "[WEB_SEARCH] ❌ Tavily API error:",
-        resp.status,
-        resp.statusText,
-      );
-      const errorText = await resp.text();
-      console.error("[WEB_SEARCH] Error response:", errorText);
-      return JSON.stringify({
-        error: "Search API error",
-        status: resp.status,
-        message: errorText,
-        query,
-      });
-    }
-
-    const data = await resp.json();
-    console.log(
-      "[WEB_SEARCH] ✓ Received",
-      data.results?.length || 0,
-      "results",
-    );
-
-    // Normalize output for the model
-    const normalized = {
-      answer: data.answer,
-      results: (data.results || []).slice(0, 5).map((r) => ({
-        title: r.title,
-        url: r.url,
-        content: r.content,
-      })),
-    };
-    console.log("[WEB_SEARCH] ✓ Search completed successfully");
-    return JSON.stringify(normalized);
-  } catch (err) {
-    console.error("[WEB_SEARCH] ❌ Exception:", err.message);
-    console.error("[WEB_SEARCH] Error stack:", err.stack);
-    return JSON.stringify({
-      error: "Search failed",
-      message: err.message,
-      query,
-    });
-  }
-}
+// Web search is now handled natively by the model
 
 // Perform image generation via DALL-E
 async function performImageGeneration(
@@ -516,23 +447,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       // Define tools for function calling (web search and image generation)
       const tools = [
         {
-          type: "function",
-          function: {
-            name: "web_search",
-            description:
-              "Search the web for current information, news, facts, or any real-time data. Use this when the user asks about current events, today's news, recent updates, or anything requiring up-to-date information beyond your training data cutoff.",
-            parameters: {
-              type: "object",
-              properties: {
-                query: {
-                  type: "string",
-                  description:
-                    "The search query to find information on the web. Be specific and include relevant keywords.",
-                },
-              },
-              required: ["query"],
-            },
-          },
+          type: "web_search",
         },
         {
           type: "function",
@@ -567,128 +482,102 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         },
       ];
 
-      // Check if the query likely needs real-time data
-      const needsRealTimeData =
-        /\b(today|now|current|latest|recent|news|happening|2024|2025|this (week|month|year))\b/i.test(
-          userMessageContent,
-        );
-      console.log("[STREAM] Query needs real-time data:", needsRealTimeData);
-
-      // Check if the query likely needs image generation
-      const needsImageGeneration =
-        /\b(generate|create|draw|make|design|produce|render)\b.*\b(image|picture|photo|illustration|artwork|visual|graphic|icon|logo|banner)\b/i.test(
-          userMessageContent,
-        ) ||
-        /\b(image|picture|photo|illustration|artwork|visual|graphic|icon|logo|banner)\b.*\b(of|for|showing|with|depicting)\b/i.test(
-          userMessageContent,
-        );
-      console.log(
-        "[STREAM] Query needs image generation:",
-        needsImageGeneration,
-      );
-
       // Determine tool choice based on query content and mode
       // Research mode ALWAYS forces web search
-      const toolChoice =
-        researchMode || needsRealTimeData ? "required" : "auto";
-      console.log(
-        "[STREAM] Tool choice strategy:",
-        toolChoice,
-        researchMode ? "(forced by research mode)" : "",
-      );
+      const toolChoice = "auto";
+      console.log("[STREAM] Tool choice strategy:", toolChoice);
 
-      // Always enable web search for real-time data
-      console.log(
-        "[STREAM] Creating preflight request to check for tool calls...",
-      );
-      let workingMessages = [...messages];
-      const preflight = await openai.chat.completions.create({
+      console.log("[STREAM] Starting stream with model:", model);
+
+      // Start streaming immediately - NO PREFLIGHT
+      let stream = await openai.chat.completions.create({
         model,
-        messages: workingMessages,
-        tools: tools,
+        messages,
+        stream: true,
+        tools,
         tool_choice: toolChoice,
       });
-      console.log("[STREAM] ✓ Preflight response received");
 
-      const preMsg = preflight.choices?.[0]?.message;
-      const toolCalls = preMsg?.tool_calls || [];
-      console.log("[STREAM] Tool calls detected:", toolCalls.length);
-
-      // Track generated images for the response
+      let toolCalls = [];
       let generatedImages = [];
+      let streamEndedWithToolCalls = false;
+      let finishReason = null;
 
-      if (toolCalls.length > 0) {
-        console.log("[STREAM] Processing", toolCalls.length, "tool call(s)...");
-        // Include assistant tool_calls message
-        workingMessages.push({
+      // Helper to process stream chunks
+      const processChunk = (chunk) => {
+        const delta = chunk.choices[0]?.delta;
+        const reason = chunk.choices[0]?.finish_reason;
+
+        // Accumulate tool calls
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index;
+            if (!toolCalls[idx]) {
+              toolCalls[idx] = {
+                id: tc.id,
+                type: tc.type,
+                function: { name: "", arguments: "" },
+              };
+            }
+            if (tc.id) toolCalls[idx].id = tc.id;
+            if (tc.type) toolCalls[idx].type = tc.type;
+            if (tc.function?.name)
+              toolCalls[idx].function.name += tc.function.name;
+            if (tc.function?.arguments)
+              toolCalls[idx].function.arguments += tc.function.arguments;
+          }
+        }
+
+        // Stream content
+        if (delta?.content) {
+          fullResponse += delta.content;
+          res.write(
+            `data: ${JSON.stringify({
+              type: "chunk",
+              content: delta.content,
+              timestamp: new Date().toISOString(),
+            })}\n\n`,
+          );
+          if (typeof res.flush === "function") res.flush();
+        }
+
+        if (reason) {
+          finishReason = reason;
+          if (reason === "tool_calls") {
+            streamEndedWithToolCalls = true;
+          }
+        }
+      };
+
+      for await (const chunk of stream) {
+        processChunk(chunk);
+      }
+
+      // Handle tool calls if the stream ended with them
+      if (streamEndedWithToolCalls && toolCalls.length > 0) {
+        console.log("[STREAM] Tool calls detected:", toolCalls.length);
+
+        // Append assistant message with tool calls
+        messages.push({
           role: "assistant",
-          content: preMsg.content || null,
+          content: fullResponse || null,
           tool_calls: toolCalls,
         });
 
-        // Execute tool calls
+        // Execute tools
         for (const call of toolCalls) {
           console.log(
-            "[STREAM] Executing tool call:",
-            call.function?.name,
-            "(ID:",
-            call.id + ")",
+            "[STREAM] Executing tool:",
+            call.function?.name || call.type,
           );
-          if (
-            call.type === "function" &&
-            call.function?.name === "web_search"
-          ) {
-            let args = {};
-            try {
-              args = JSON.parse(call.function.arguments || "{}");
-            } catch (_) {}
-            const query = args.query || userMessageContent;
-            console.log("[STREAM] Web search query:", query);
-            const searchStartTime = Date.now();
-            const result = await performWebSearch(query);
-            const searchDuration = Date.now() - searchStartTime;
-            console.log(
-              "[STREAM] ✓ Web search completed in",
-              searchDuration,
-              "ms. Result length:",
-              result.length,
-            );
-            // Log search result preview
-            try {
-              const resultObj = JSON.parse(result);
-              console.log("[STREAM] Search result preview:", {
-                hasAnswer: !!resultObj.answer,
-                answerPreview: resultObj.answer?.substring(0, 100),
-                resultsCount: resultObj.results?.length || 0,
-                hasError: !!resultObj.error,
-              });
-            } catch (e) {
-              console.log("[STREAM] Could not parse search result for preview");
-            }
-            workingMessages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              content: result,
-            });
-            console.log("[STREAM] ✓ Tool result added to messages");
-          } else if (
-            call.type === "function" &&
-            call.function?.name === "generate_image"
-          ) {
-            let args = {};
-            try {
-              args = JSON.parse(call.function.arguments || "{}");
-            } catch (_) {}
-            const imagePrompt = args.prompt || userMessageContent;
-            const size = args.size || "1024x1024";
-            const quality = args.quality || "auto";
-            console.log("[STREAM] Image generation request:", {
-              promptPreview: imagePrompt.substring(0, 100),
-              size,
-              quality,
-            });
 
-            // Send a progress event to the client
+          if (call.function?.name === "generate_image") {
+            let args = {};
+            try {
+              args = JSON.parse(call.function.arguments || "{}");
+            } catch (_) {}
+
+            // Send progress
             res.write(
               `data: ${JSON.stringify({
                 type: "progress",
@@ -699,21 +588,14 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
             );
             if (typeof res.flush === "function") res.flush();
 
-            const genStartTime = Date.now();
             const result = await performImageGeneration(
-              imagePrompt,
-              size,
-              quality,
-            );
-            const genDuration = Date.now() - genStartTime;
-            console.log(
-              "[STREAM] ✓ Image generation completed in",
-              genDuration,
-              "ms",
+              args.prompt,
+              args.size,
+              args.quality,
             );
 
-            // Parse result and track generated image
-            let toolResponseForLLM = result; // Default to full result
+            // Handle result
+            let toolResponse = result;
             try {
               const resultObj = JSON.parse(result);
               if (resultObj.success && resultObj.b64_json) {
@@ -721,9 +603,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
                   b64_json: resultObj.b64_json,
                   revised_prompt: resultObj.revised_prompt,
                 });
-                console.log("[STREAM] ✓ Image added to generated images list");
-
-                // Send image event to client with b64_json
+                // Send image event
                 res.write(
                   `data: ${JSON.stringify({
                     type: "image",
@@ -734,150 +614,61 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
                 );
                 if (typeof res.flush === "function") res.flush();
 
-                // Create a lightweight response for the LLM (without base64 data)
-                // This prevents token limit issues when sending back to the model
-                toolResponseForLLM = JSON.stringify({
+                toolResponse = JSON.stringify({
                   success: true,
                   message: "Image generated successfully and sent to the user.",
                   revised_prompt: resultObj.revised_prompt,
                   image_delivered: true,
                 });
               }
-            } catch (e) {
-              console.log("[STREAM] Could not parse image generation result");
-            }
+            } catch (_) {}
 
-            workingMessages.push({
+            messages.push({
               role: "tool",
               tool_call_id: call.id,
-              content: toolResponseForLLM,
+              content: toolResponse,
             });
-            console.log("[STREAM] ✓ Tool result added to messages");
+          } else {
+            // Handle other tools (like web_search if it returns a tool call)
+            // For native web_search, we might just acknowledge it
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: "Tool executed successfully.",
+            });
           }
         }
-        console.log("[STREAM] ✓ All tool calls executed");
-        console.log(
-          "[STREAM] Total messages before final response:",
-          workingMessages.length,
-        );
 
-        // Stream final answer; prevent further tool calls to avoid loops
-        console.log("[STREAM] Creating streaming request with tool results...");
-        const stream = await openai.chat.completions.create({
-          model,
-          messages: workingMessages,
-          stream: true,
-          tools: tools,
-          tool_choice: "none",
-        });
-
-        console.log(
-          `[STREAM] Starting stream with model: ${model} (with tool results)`,
-        );
-        let chunkCount = 0;
-        const streamStartTime = Date.now();
-        for await (const chunk of stream) {
-          const content = chunk.choices[0]?.delta?.content || "";
-          if (content) {
-            chunkCount++;
-            fullResponse += content;
-            res.write(
-              `data: ${JSON.stringify({
-                type: "chunk",
-                content: content,
-                timestamp: new Date().toISOString(),
-              })}\n\n`,
-            );
-            if (typeof res.flush === "function") res.flush();
-
-            // Log every 50 chunks to avoid log spam
-            if (chunkCount % 50 === 0) {
-              console.log(
-                `[STREAM] Streaming progress: ${chunkCount} chunks, ${fullResponse.length} chars`,
-              );
-            }
-          }
-          if (chunk.choices[0]?.finish_reason) {
-            const streamDuration = Date.now() - streamStartTime;
-            console.log(`[STREAM] ✓ Stream completed from ${model}`);
-            console.log(`[STREAM] Stream statistics:`);
-            console.log(`  - Total chunks: ${chunkCount}`);
-            console.log(`  - Response length: ${fullResponse.length} chars`);
-            console.log(`  - Stream duration: ${streamDuration}ms`);
-            console.log(`  - Finish reason: ${chunk.choices[0].finish_reason}`);
-            res.write(
-              `data: ${JSON.stringify({
-                type: "done",
-                finish_reason: chunk.choices[0].finish_reason,
-                full_response: fullResponse,
-                generated_images:
-                  generatedImages.length > 0 ? generatedImages : undefined,
-                timestamp: new Date().toISOString(),
-              })}\n\n`,
-            );
-            if (typeof res.flush === "function") res.flush();
-            break;
-          }
-        }
-      } else {
-        // No tool calls requested; stream normally
-        console.log(
-          "[STREAM] No tool calls needed. Creating direct streaming request...",
-        );
-        const stream = await openai.chat.completions.create({
+        // Start second stream for final response
+        console.log("[STREAM] Starting second stream after tools...");
+        const secondStream = await openai.chat.completions.create({
           model,
           messages,
           stream: true,
-          tools: tools,
+          tools,
+          tool_choice: "none",
         });
 
-        console.log(`[STREAM] Starting stream with model: ${model}`);
-        let chunkCount = 0;
-        const streamStartTime = Date.now();
-        for await (const chunk of stream) {
-          const content = chunk.choices[0]?.delta?.content || "";
-          if (content) {
-            chunkCount++;
-            fullResponse += content;
-            res.write(
-              `data: ${JSON.stringify({
-                type: "chunk",
-                content: content,
-                timestamp: new Date().toISOString(),
-              })}\n\n`,
-            );
-            if (typeof res.flush === "function") res.flush();
-
-            // Log every 50 chunks to avoid log spam
-            if (chunkCount % 50 === 0) {
-              console.log(
-                `[STREAM] Streaming progress: ${chunkCount} chunks, ${fullResponse.length} chars`,
-              );
-            }
-          }
-          if (chunk.choices[0]?.finish_reason) {
-            const streamDuration = Date.now() - streamStartTime;
-            console.log(`[STREAM] ✓ Stream completed from ${model}`);
-            console.log(`[STREAM] Stream statistics:`);
-            console.log(`  - Total chunks: ${chunkCount}`);
-            console.log(`  - Response length: ${fullResponse.length} chars`);
-            console.log(`  - Stream duration: ${streamDuration}ms`);
-            console.log(`  - Finish reason: ${chunk.choices[0].finish_reason}`);
-            res.write(
-              `data: ${JSON.stringify({
-                type: "done",
-                finish_reason: chunk.choices[0].finish_reason,
-                full_response: fullResponse,
-                generated_images:
-                  generatedImages.length > 0 ? generatedImages : undefined,
-                timestamp: new Date().toISOString(),
-              })}\n\n`,
-            );
-            if (typeof res.flush === "function") res.flush();
-            break;
-          }
+        for await (const chunk of secondStream) {
+          processChunk(chunk);
         }
       }
+
+      // Send done event
+      console.log(
+        `[STREAM] ✓ Stream completed. Length: ${fullResponse.length}`,
+      );
+      res.write(
+        `data: ${JSON.stringify({
+          type: "done",
+          finish_reason: finishReason,
+          full_response: fullResponse,
+          generated_images:
+            generatedImages.length > 0 ? generatedImages : undefined,
+          timestamp: new Date().toISOString(),
+        })}\n\n`,
+      );
+      if (typeof res.flush === "function") res.flush();
 
       // Save messages to database
       console.log("[STREAM] Saving messages to database...");
