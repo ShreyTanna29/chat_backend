@@ -591,6 +591,9 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       // Standard chat completion chunk: chunk.choices[0].delta
       // Responses API chunk: might be different, but assuming similar for now or checking properties
 
+      // DEBUG LOG
+      console.log("[STREAM-DEBUG] Chunk:", JSON.stringify(chunk));
+
       let delta, reason;
 
       if (chunk.choices && chunk.choices[0]) {
@@ -605,6 +608,13 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         delta = chunk.delta || {};
         reason = chunk.finish_reason;
       }
+
+      console.log(
+        "[STREAM-DEBUG] Delta:",
+        JSON.stringify(delta),
+        "Reason:",
+        reason,
+      );
 
       // Accumulate tool calls
       if (delta?.tool_calls) {
