@@ -199,10 +199,10 @@ router.post("/google", googleAuthValidation, async (req, res) => {
       user = await User.findByEmail(email);
 
       if (user) {
-        // Link Google ID to existing user
+        // Link Google ID to existing user and update avatar
         user = await User.update(user.id, {
           googleId,
-          avatar: user.avatar || avatar,
+          avatar: avatar || user.avatar,
         });
       } else {
         // Create new user
@@ -212,6 +212,13 @@ router.post("/google", googleAuthValidation, async (req, res) => {
           googleId,
           avatar,
           isVerified: true, // Google emails are verified
+        });
+      }
+    } else {
+      // Update avatar for returning Google users (profile picture may have changed)
+      if (avatar && avatar !== user.avatar) {
+        user = await User.update(user.id, {
+          avatar,
         });
       }
     }
