@@ -1,5 +1,6 @@
 const express = require("express");
 const { validationResult } = require("express-validator");
+const multer = require("multer");
 const User = require("../models/User");
 const auth = require("../middleware/auth");
 const {
@@ -18,6 +19,23 @@ const { OAuth2Client } = require("google-auth-library");
 const appleSignin = require("apple-signin-auth");
 const crypto = require("crypto");
 const sendEmail = require("../utils/email");
+const { uploadToCloudinary } = require("../utils/cloudinary");
+
+// Configure multer for profile picture uploads
+const profilePicUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB max file size
+  },
+  fileFilter: (req, file, cb) => {
+    // Only allow image files
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed"), false);
+    }
+  },
+});
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID_WEB);
 
@@ -502,6 +520,74 @@ router.put("/profile", auth, async (req, res) => {
     });
   }
 });
+
+// @route   POST /api/auth/profile/picture
+// @desc    Upload user profile picture
+// @access  Private
+router.post(
+  "/profile/picture",
+  auth,
+  profilePicUpload.single("profilePic"),
+  async (req, res) => {
+    try {
+      // Check if file was uploaded
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "No image file provided",
+        });
+      }
+
+      console.log("[PROFILE] Uploading profile picture for user:", req.user.id);
+
+      // Upload to Cloudinary
+      const result = await uploadToCloudinary(
+        req.file.buffer,
+        "perplex/profile_pictures",
+        "image",
+      );
+
+      console.log("[PROFILE] Cloudinary upload successful:", result.secure_url);
+
+      // Update user's avatar in database
+      const updatedUser = await User.update(req.user.id, {
+        avatar: result.secure_url,
+      });
+
+      res.json({
+        success: true,
+        message: "Profile picture uploaded successfully",
+        data: {
+          user: updatedUser,
+          imageUrl: result.secure_url,
+          publicId: result.public_id,
+        },
+      });
+    } catch (error) {
+      console.error("Profile picture upload error:", error);
+
+      // Handle multer errors
+      if (error.message === "Only image files are allowed") {
+        return res.status(400).json({
+          success: false,
+          message: "Only image files are allowed",
+        });
+      }
+
+      if (error.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({
+          success: false,
+          message: "File size exceeds the 5MB limit",
+        });
+      }
+
+      res.status(500).json({
+        success: false,
+        message: "Failed to upload profile picture",
+      });
+    }
+  },
+);
 
 // @route   POST /api/auth/forgot-password
 // @desc    Forgot password
