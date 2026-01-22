@@ -18,6 +18,10 @@ const prisma = require("../config/database");
 
 const router = express.Router();
 
+// Store active streams for abort functionality
+// Key: streamId, Value: { abortController, conversationId, userId, fullResponse, startTime }
+const activeStreams = new Map();
+
 // Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -296,18 +300,36 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     let fullResponse = "";
     console.log("[STREAM] ✓ SSE headers configured");
 
+    // Generate unique streamId and create AbortController for this stream
+    const streamId = nanoid();
+    const abortController = new AbortController();
+    let isAborted = false;
+
+    // Store stream info for potential abort
+    activeStreams.set(streamId, {
+      abortController,
+      conversationId: conversation.id,
+      userId: req.user.id,
+      getFullResponse: () => fullResponse,
+      startTime: Date.now(),
+      userMessageContent: null, // Will be set later
+      model: null, // Will be set later
+    });
+    console.log("[STREAM] ✓ Stream registered with ID:", streamId);
+
     try {
       res.setHeader("Content-Encoding", "identity");
     } catch (_) {}
     if (typeof res.flushHeaders === "function") res.flushHeaders();
 
-    // Send initial connection confirmation immediately
+    // Send initial connection confirmation immediately with streamId
     console.log("[STREAM] Sending 'connected' event to client");
     res.write(
       `data: ${JSON.stringify({
         type: "connected",
         message: "Stream started",
         conversationId: conversation.id,
+        streamId: streamId,
       })}\n\n`,
     );
     if (typeof res.flush === "function") res.flush();
@@ -324,14 +346,27 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     req.on("aborted", () => {
       try {
         clearInterval(heartbeat);
-        console.warn("[STREAM] Request aborted by client");
+        isAborted = true;
+        abortController.abort();
+        activeStreams.delete(streamId);
+        console.warn(
+          "[STREAM] Request aborted by client, stream ID:",
+          streamId,
+        );
       } catch (_) {}
     });
     req.on("close", () => {
       try {
         clearInterval(heartbeat);
+        activeStreams.delete(streamId);
       } catch (_) {}
     });
+
+    // Helper function to clean up stream on stop/complete
+    const cleanupStream = () => {
+      activeStreams.delete(streamId);
+      clearInterval(heartbeat);
+    };
 
     // Load space (if provided) and build system prompts
     let space = null;
@@ -658,6 +693,16 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     };
 
     for await (const chunk of stream) {
+      // Check if stream was aborted
+      if (isAborted || abortController.signal.aborted) {
+        console.log(
+          "[STREAM] Stream aborted by user, stopping at",
+          fullResponse.length,
+          "characters",
+        );
+        finishReason = "stopped";
+        break;
+      }
       processChunk(chunk);
     }
 
@@ -758,6 +803,12 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       });
 
       for await (const chunk of secondStream) {
+        // Check if stream was aborted
+        if (isAborted || abortController.signal.aborted) {
+          console.log("[STREAM] Second stream aborted by user");
+          finishReason = "stopped";
+          break;
+        }
         processChunk(chunk);
       }
     }
@@ -894,7 +945,8 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       );
     }
 
-    clearInterval(heartbeat);
+    // Clean up stream from active streams
+    cleanupStream();
     const totalDuration = Date.now() - requestStartTime;
     console.log("[STREAM] Closing stream connection");
     console.log("[STREAM] Total request duration:", totalDuration, "ms");
@@ -939,6 +991,78 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     } catch (_) {}
     res.end();
     console.log("========== [STREAM] Request Failed ==========\n");
+  }
+});
+
+// @route   POST /api/chat/stop
+// @desc    Stop an ongoing stream response
+// @access  Private
+router.post("/stop", auth, async (req, res) => {
+  try {
+    const { streamId } = req.body;
+
+    console.log("[STOP] Stop request received for streamId:", streamId);
+
+    if (!streamId) {
+      return res.status(400).json({
+        success: false,
+        message: "streamId is required",
+      });
+    }
+
+    // Find the active stream
+    const streamInfo = activeStreams.get(streamId);
+
+    if (!streamInfo) {
+      console.log("[STOP] Stream not found:", streamId);
+      return res.status(404).json({
+        success: false,
+        message: "Stream not found or already completed",
+      });
+    }
+
+    // Verify the user owns this stream
+    if (streamInfo.userId !== req.user.id) {
+      console.log("[STOP] Unauthorized access attempt for stream:", streamId);
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    // Abort the stream
+    console.log("[STOP] Aborting stream:", streamId);
+    streamInfo.abortController.abort();
+
+    // Get the partial response before cleanup
+    const partialResponse = streamInfo.getFullResponse();
+    const conversationId = streamInfo.conversationId;
+
+    // Clean up
+    activeStreams.delete(streamId);
+
+    console.log(
+      "[STOP] Stream stopped successfully. Partial response length:",
+      partialResponse?.length || 0,
+    );
+
+    res.json({
+      success: true,
+      message: "Stream stopped successfully",
+      data: {
+        streamId,
+        conversationId,
+        partialResponseLength: partialResponse?.length || 0,
+        stoppedAt: new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    console.error("[STOP] Error stopping stream:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to stop stream",
+      error: error.message,
+    });
   }
 });
 
