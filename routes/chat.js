@@ -557,7 +557,6 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         input: inputString,
         tools: [{ type: "web_search" }],
         stream: true,
-        reasoning: { effort: "minimal" },
       });
     } else {
       // Fallback to standard chat completions
