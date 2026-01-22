@@ -30,8 +30,9 @@ model User {
   preferences   Json           @default("{\"theme\":\"auto\",\"language\":\"en\"}")
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
-  conversations Conversation[]
-  spaces        Space[]
+  conversations       Conversation[]
+  spaces               Space[]
+  sharedConversations  SharedConversation[]
 
   @@map("users")
 }
@@ -41,8 +42,9 @@ model Conversation {
   userId    String
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   title     String    @default("New Chat")
-  messages  Message[]
-  spaceId   String?
+  messages            Message[]
+  sharedConversations SharedConversation[]
+  spaceId             String?
   space     Space?    @relation(fields: [spaceId], references: [id], onDelete: SetNull)
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -79,4 +81,19 @@ model Space {
   @@unique([userId, name])
   @@index([userId])
   @@map("spaces")
+}
+
+/// SharedConversation: Stores share links for public conversation access
+model SharedConversation {
+  id             String       @id @default(cuid())
+  shareId        String       @unique @db.VarChar(32)
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sharedBy       String
+  user           User         @relation(fields: [sharedBy], references: [id])
+  sharedAt       DateTime     @default(now())
+
+  @@index([shareId])
+  @@index([conversationId])
+  @@map("shared_conversations")
 }

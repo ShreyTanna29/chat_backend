@@ -13,6 +13,8 @@ const {
   SUPPORTED_DOCUMENT_TYPES,
 } = require("../utils/documentParser");
 const { uploadToCloudinary } = require("../utils/cloudinary");
+const { nanoid } = require("nanoid");
+const prisma = require("../config/database");
 
 const router = express.Router();
 
@@ -2206,6 +2208,156 @@ router.post("/tts/stream", auth, async (req, res) => {
 
     // If streaming already started, end the response
     res.end();
+  }
+});
+
+// ============================================
+// Chat Sharing Endpoints
+// ============================================
+
+// @route   POST /api/chat/share
+// @desc    Create a shareable link for a conversation
+// @access  Private
+router.post("/share", auth, async (req, res) => {
+  try {
+    const { conversationId } = req.body;
+
+    if (!conversationId) {
+      return res.status(400).json({
+        success: false,
+        message: "conversationId is required",
+      });
+    }
+
+    // Check if conversation exists and user owns it
+    const conversation = await Conversation.findById(conversationId, {
+      includeMessages: false,
+    });
+
+    if (!conversation) {
+      return res.status(404).json({
+        success: false,
+        message: "Conversation not found",
+      });
+    }
+
+    if (conversation.userId !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only share your own conversations.",
+      });
+    }
+
+    // Check if conversation is already shared
+    const existingShare = await prisma.sharedConversation.findFirst({
+      where: { conversationId },
+    });
+
+    if (existingShare) {
+      // Return existing share link
+      const baseUrl = process.env.FRONTEND_URL || "https://eruditeaic.com";
+      return res.json({
+        success: true,
+        data: {
+          shareId: existingShare.shareId,
+          shareUrl: `${baseUrl}/shared/${existingShare.shareId}`,
+        },
+      });
+    }
+
+    // Generate unique share ID (8 characters)
+    const shareId = nanoid(8);
+
+    // Create share record
+    await prisma.sharedConversation.create({
+      data: {
+        shareId,
+        conversationId,
+        sharedBy: req.user.id,
+      },
+    });
+
+    const baseUrl = process.env.FRONTEND_URL || "https://eruditeaic.com";
+
+    res.json({
+      success: true,
+      data: {
+        shareId,
+        shareUrl: `${baseUrl}/shared/${shareId}`,
+      },
+    });
+  } catch (error) {
+    console.error("Share conversation error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to share conversation",
+      error: error.message,
+    });
+  }
+});
+
+// @route   GET /api/chat/shared/:shareId
+// @desc    Get a shared conversation (public access)
+// @access  Public
+router.get("/shared/:shareId", async (req, res) => {
+  try {
+    const { shareId } = req.params;
+
+    // Look up the share record
+    const sharedConversation = await prisma.sharedConversation.findUnique({
+      where: { shareId },
+      include: {
+        conversation: {
+          include: {
+            messages: {
+              orderBy: { createdAt: "asc" },
+            },
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (!sharedConversation) {
+      return res.status(404).json({
+        success: false,
+        message: "Shared conversation not found",
+      });
+    }
+
+    // Format the response
+    const { conversation, user, sharedAt } = sharedConversation;
+
+    res.json({
+      success: true,
+      data: {
+        id: conversation.id,
+        shareId,
+        title: conversation.title,
+        messages: conversation.messages.map((msg) => ({
+          id: msg.id,
+          role: msg.role,
+          content: msg.content,
+          metadata: msg.metadata,
+          createdAt: msg.createdAt,
+        })),
+        sharedBy: user.name,
+        sharedAt,
+        createdAt: conversation.createdAt,
+      },
+    });
+  } catch (error) {
+    console.error("Get shared conversation error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch shared conversation",
+      error: error.message,
+    });
   }
 });
 
