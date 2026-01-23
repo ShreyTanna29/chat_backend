@@ -630,11 +630,21 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       // Standard chat completion chunk: chunk.choices[0].delta
       // Responses API chunk: type="response.output_text.delta", delta="text"
 
-      // Debug logging for stream chunks
-      if (chunk.type && chunk.type.includes("image")) {
+      // Debug logging for ALL stream chunks with response type
+      if (chunk.type && chunk.type.startsWith("response.")) {
         console.log(
-          "[STREAM] Image-related chunk received:",
-          JSON.stringify(chunk, null, 2)
+          "[STREAM] Responses API chunk:",
+          JSON.stringify(
+            chunk,
+            (key, value) => {
+              // Truncate base64 data for logging
+              if (typeof value === "string" && value.length > 200) {
+                return value.substring(0, 100) + `...[${value.length} chars]`;
+              }
+              return value;
+            },
+            2
+          )
         );
       }
 
@@ -648,8 +658,70 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         // Responses API text delta
         delta = { content: chunk.delta };
       } else if (chunk.type === "response.completed") {
-        // Responses API completion
+        // Responses API completion - also check for images in output
         reason = "stop";
+
+        // Check if the completed response contains any images we might have missed
+        if (chunk.response?.output) {
+          console.log("[STREAM] Checking response.completed for images...");
+          for (const outputItem of chunk.response.output) {
+            if (
+              outputItem.type === "image_generation_call" ||
+              outputItem.type === "image"
+            ) {
+              console.log(
+                "[STREAM] Found image in completed response:",
+                JSON.stringify(
+                  outputItem,
+                  (key, value) => {
+                    if (typeof value === "string" && value.length > 100) {
+                      return (
+                        value.substring(0, 50) + `...[${value.length} chars]`
+                      );
+                    }
+                    return value;
+                  },
+                  2
+                )
+              );
+
+              // Extract image data from various possible structures
+              let imageData =
+                outputItem.result?.b64_json ||
+                outputItem.b64_json ||
+                outputItem.image_data ||
+                outputItem.image ||
+                outputItem.data;
+              let revisedPrompt =
+                outputItem.result?.revised_prompt ||
+                outputItem.revised_prompt ||
+                outputItem.prompt ||
+                "";
+
+              // Check if we already sent this image
+              const alreadySent = generatedImages.some(
+                (img) => img.b64_json === imageData || img.url === imageData
+              );
+
+              if (imageData && typeof imageData === "string" && !alreadySent) {
+                generatedImages.push({
+                  b64_json: imageData,
+                  revised_prompt: revisedPrompt,
+                });
+                res.write(
+                  `data: ${JSON.stringify({
+                    type: "image",
+                    b64_json: imageData,
+                    revised_prompt: revisedPrompt,
+                    timestamp: new Date().toISOString(),
+                  })}\n\n`
+                );
+                if (typeof res.flush === "function") res.flush();
+                console.log("[STREAM] ✓ Image sent from response.completed");
+              }
+            }
+          }
+        }
       } else if (
         chunk.type === "response.output_item.done" &&
         chunk.item?.type === "image_generation_call"
@@ -673,17 +745,27 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
             2
           )
         );
+        console.log("[STREAM] Item top-level keys:", Object.keys(item));
 
         // Try to extract image data from various possible structures
         let imageData = null;
         let revisedPrompt = "";
 
+        // Check direct item properties first (most common in responses API)
+        imageData = item.b64_json || item.image_data || item.data;
+        revisedPrompt = item.revised_prompt || item.prompt || "";
+
         // Check item.result (standard structure)
-        if (item.result) {
+        if (!imageData && item.result) {
           const imageResult = item.result;
+          console.log(
+            "[STREAM] Checking item.result, keys:",
+            Object.keys(imageResult)
+          );
           imageData =
             imageResult.b64_json || imageResult.image || imageResult.data;
-          revisedPrompt = imageResult.revised_prompt || item.call?.prompt || "";
+          revisedPrompt =
+            imageResult.revised_prompt || item.call?.prompt || revisedPrompt;
 
           // Check for URL-based response
           if (!imageData && imageResult.url) {
@@ -707,9 +789,14 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
 
         // Check item.image (alternative structure)
         if (!imageData && item.image) {
-          imageData = item.image.b64_json || item.image.data || item.image;
-          revisedPrompt =
-            item.image.revised_prompt || item.revised_prompt || "";
+          console.log("[STREAM] Checking item.image");
+          if (typeof item.image === "string") {
+            imageData = item.image;
+          } else {
+            imageData = item.image.b64_json || item.image.data || item.image;
+            revisedPrompt =
+              item.image.revised_prompt || item.revised_prompt || revisedPrompt;
+          }
         }
 
         // Check item.output (another possible structure)
@@ -743,6 +830,31 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
           }
         }
 
+        // Last resort: scan all properties for base64 data
+        if (!imageData) {
+          console.log(
+            "[STREAM] Scanning all item properties for image data..."
+          );
+          const findBase64InObject = (obj, depth = 0) => {
+            if (depth > 3 || !obj || typeof obj !== "object") return null;
+            for (const [key, value] of Object.entries(obj)) {
+              if (typeof value === "string" && value.length > 1000) {
+                // Likely base64 image data
+                console.log(
+                  `[STREAM] Found potential base64 at key: ${key}, length: ${value.length}`
+                );
+                return value;
+              }
+              if (typeof value === "object" && value !== null) {
+                const found = findBase64InObject(value, depth + 1);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          imageData = findBase64InObject(item);
+        }
+
         // Send image event if we found base64 data
         if (imageData && typeof imageData === "string") {
           generatedImages.push({
@@ -760,6 +872,10 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
           );
           if (typeof res.flush === "function") res.flush();
           console.log("[STREAM] ✓ Image b64 event sent to client");
+        } else {
+          console.log(
+            "[STREAM] ⚠ No image data found in image_generation_call item"
+          );
         }
       } else if (
         chunk.type === "response.output_item.added" &&
@@ -778,14 +894,106 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         if (typeof res.flush === "function") res.flush();
       } else if (
         chunk.type === "response.output_item.done" &&
+        chunk.item?.type === "image"
+      ) {
+        // Handle direct image output from the responses API
+        const item = chunk.item;
+        console.log("[STREAM] Direct image output received from responses API");
+
+        // Try to extract image data - the image might be in various places
+        let imageData =
+          item.image_data || item.data || item.b64_json || item.image;
+        let revisedPrompt = item.revised_prompt || item.prompt || "";
+
+        // Handle nested structure
+        if (!imageData && item.content) {
+          imageData =
+            item.content.b64_json ||
+            item.content.data ||
+            item.content.image ||
+            item.content;
+          revisedPrompt = item.content.revised_prompt || revisedPrompt;
+        }
+
+        // Handle array content
+        if (!imageData && Array.isArray(item.content)) {
+          for (const content of item.content) {
+            const imgData = content.b64_json || content.data || content.image;
+            if (imgData && typeof imgData === "string") {
+              generatedImages.push({
+                b64_json: imgData,
+                revised_prompt: content.revised_prompt || revisedPrompt,
+              });
+              res.write(
+                `data: ${JSON.stringify({
+                  type: "image",
+                  b64_json: imgData,
+                  revised_prompt: content.revised_prompt || revisedPrompt,
+                  timestamp: new Date().toISOString(),
+                })}\n\n`
+              );
+              if (typeof res.flush === "function") res.flush();
+              console.log("[STREAM] ✓ Image event sent from content array");
+            }
+          }
+        }
+
+        if (imageData && typeof imageData === "string") {
+          generatedImages.push({
+            b64_json: imageData,
+            revised_prompt: revisedPrompt,
+          });
+          res.write(
+            `data: ${JSON.stringify({
+              type: "image",
+              b64_json: imageData,
+              revised_prompt: revisedPrompt,
+              timestamp: new Date().toISOString(),
+            })}\n\n`
+          );
+          if (typeof res.flush === "function") res.flush();
+          console.log("[STREAM] ✓ Direct image event sent to client");
+        }
+      } else if (
+        chunk.type === "response.output_item.done" &&
         chunk.item?.type === "function_call"
       ) {
         // Handle tool calls if they appear here (future proofing)
+      } else if (
+        chunk.type === "response.image_generation.done" ||
+        chunk.type === "response.image_generation_call.done"
+      ) {
+        // Handle dedicated image generation completion event
+        console.log("[STREAM] Image generation done event received");
+        const imageData =
+          chunk.result?.b64_json || chunk.b64_json || chunk.image || chunk.data;
+        const revisedPrompt =
+          chunk.result?.revised_prompt || chunk.revised_prompt || "";
+
+        if (imageData && typeof imageData === "string") {
+          generatedImages.push({
+            b64_json: imageData,
+            revised_prompt: revisedPrompt,
+          });
+          res.write(
+            `data: ${JSON.stringify({
+              type: "image",
+              b64_json: imageData,
+              revised_prompt: revisedPrompt,
+              timestamp: new Date().toISOString(),
+            })}\n\n`
+          );
+          if (typeof res.flush === "function") res.flush();
+          console.log("[STREAM] ✓ Image sent from image_generation.done event");
+        }
       } else if (chunk.type && chunk.type.startsWith("response.")) {
         // Log other responses API events for debugging
         console.log("[STREAM] Unhandled responses API event:", chunk.type);
         if (chunk.item?.type) {
           console.log("[STREAM]   item.type:", chunk.item.type);
+        }
+        if (chunk.item) {
+          console.log("[STREAM]   item keys:", Object.keys(chunk.item));
         }
         // Fallback/Generic
         delta = chunk.delta || {};
