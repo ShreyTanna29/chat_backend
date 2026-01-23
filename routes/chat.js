@@ -36,8 +36,8 @@ function toAIErrorResponse(err, fallbackMessage = "AI service error") {
     (err?.code === "insufficient_quota"
       ? 402
       : err?.code === "rate_limit_exceeded"
-        ? 429
-        : 502);
+      ? 429
+      : 502);
 
   const ai = err?.error || err?.response?.data?.error;
 
@@ -67,7 +67,7 @@ function toAIErrorResponse(err, fallbackMessage = "AI service error") {
 async function performImageGeneration(
   prompt,
   size = "1024x1024",
-  quality = "standard",
+  quality = "standard"
 ) {
   console.log("[IMAGE_GEN] Starting image generation for prompt:", prompt);
   try {
@@ -162,7 +162,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       "  - Prompt preview:",
       prompt
         ? prompt.substring(0, 100) + (prompt.length > 100 ? "..." : "")
-        : "N/A",
+        : "N/A"
     );
     console.log("  - Has image:", !!imageFile);
     if (imageFile) {
@@ -189,14 +189,14 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     if (documentFile && !isSupportedDocument(documentFile.mimetype)) {
       console.log(
         "[STREAM] ❌ Unsupported document type:",
-        documentFile.mimetype,
+        documentFile.mimetype
       );
       return res.status(400).json({
         success: false,
         message: `Unsupported document type: ${
           documentFile.mimetype
         }. Supported types: ${Object.keys(SUPPORTED_DOCUMENT_TYPES).join(
-          ", ",
+          ", "
         )}`,
       });
     }
@@ -210,13 +210,13 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     console.log("[STREAM] Model selected:", model);
     if (researchMode) {
       console.log(
-        "[STREAM] Research mode active - will force comprehensive web search",
+        "[STREAM] Research mode active - will force comprehensive web search"
       );
     }
 
     if (!prompt && !imageFile && !documentFile) {
       console.log(
-        "[STREAM] ❌ Validation failed: No prompt, image, or document provided",
+        "[STREAM] ❌ Validation failed: No prompt, image, or document provided"
       );
       return res.status(400).json({
         success: false,
@@ -233,7 +233,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         const parsed = await parseDocument(
           documentFile.buffer,
           documentFile.mimetype,
-          documentFile.originalname,
+          documentFile.originalname
         );
         documentContent = parsed.text;
         documentMetadata = parsed.metadata;
@@ -244,7 +244,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       } catch (parseError) {
         console.error(
           "[STREAM] ❌ Document parsing failed:",
-          parseError.message,
+          parseError.message
         );
         return res.status(400).json({
           success: false,
@@ -264,7 +264,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       if (!conversation || conversation.userId !== req.user.id) {
         console.log(
           "[STREAM] ❌ Conversation not found or access denied:",
-          conversationId,
+          conversationId
         );
         return res.status(404).json({
           success: false,
@@ -273,7 +273,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       }
       console.log(
         "[STREAM] ✓ Conversation loaded. Message count:",
-        conversation.messages?.length || 0,
+        conversation.messages?.length || 0
       );
     } else {
       console.log("[STREAM] Creating new conversation...");
@@ -330,7 +330,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         message: "Stream started",
         conversationId: conversation.id,
         streamId: streamId,
-      })}\n\n`,
+      })}\n\n`
     );
     if (typeof res.flush === "function") res.flush();
     console.log("[STREAM] ✓ Connection established with client");
@@ -351,7 +351,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         activeStreams.delete(streamId);
         console.warn(
           "[STREAM] Request aborted by client, stream ID:",
-          streamId,
+          streamId
         );
       } catch (_) {}
     });
@@ -413,7 +413,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       console.log(
         "[STREAM] Adding conversation history:",
         conversation.messages.length,
-        "messages",
+        "messages"
       );
       conversation.messages.forEach((msg) => {
         messages.push({
@@ -465,7 +465,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       });
       console.log(
         "[STREAM] ✓ User message with image added. Base64 length:",
-        base64Image.length,
+        base64Image.length
       );
       if (documentContent) {
         console.log("[STREAM] ✓ Document content also included in message");
@@ -542,7 +542,9 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         // Add conversation history (last 10 messages to keep it concise)
         const history = messages.filter((m) => m.role !== "system").slice(-10);
         history.forEach((msg) => {
-          inputString += `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}\n`;
+          inputString += `${msg.role === "user" ? "User" : "Assistant"}: ${
+            msg.content
+          }\n`;
         });
       }
       // Ensure the prompt is at the end if not already added
@@ -555,7 +557,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       stream = await openai.responses.create({
         model,
         input: inputString,
-        tools: [{ type: "web_search" }],
+        tools: [{ type: "web_search" }, { type: "image_generation" }],
         stream: true,
       });
     } else {
@@ -604,7 +606,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
 
       console.log(
         "[STREAM] Starting stream with chat completions. Model:",
-        model,
+        model
       );
 
       // Start streaming immediately - NO PREFLIGHT
@@ -679,7 +681,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
             type: "chunk",
             content: delta.content,
             timestamp: new Date().toISOString(),
-          })}\n\n`,
+          })}\n\n`
         );
         if (typeof res.flush === "function") res.flush();
       }
@@ -698,7 +700,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         console.log(
           "[STREAM] Stream aborted by user, stopping at",
           fullResponse.length,
-          "characters",
+          "characters"
         );
         finishReason = "stopped";
         break;
@@ -721,7 +723,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       for (const call of toolCalls) {
         console.log(
           "[STREAM] Executing tool:",
-          call.function?.name || call.type,
+          call.function?.name || call.type
         );
 
         if (call.function?.name === "generate_image") {
@@ -737,14 +739,14 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
               message: "Generating image...",
               tool: "generate_image",
               timestamp: new Date().toISOString(),
-            })}\n\n`,
+            })}\n\n`
           );
           if (typeof res.flush === "function") res.flush();
 
           const result = await performImageGeneration(
             args.prompt,
             args.size,
-            args.quality,
+            args.quality
           );
 
           // Handle result
@@ -763,7 +765,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
                   b64_json: resultObj.b64_json,
                   revised_prompt: resultObj.revised_prompt,
                   timestamp: new Date().toISOString(),
-                })}\n\n`,
+                })}\n\n`
               );
               if (typeof res.flush === "function") res.flush();
 
@@ -823,7 +825,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         generated_images:
           generatedImages.length > 0 ? generatedImages : undefined,
         timestamp: new Date().toISOString(),
-      })}\n\n`,
+      })}\n\n`
     );
     if (typeof res.flush === "function") res.flush();
 
@@ -839,7 +841,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
           const result = await uploadToCloudinary(
             imageFile.buffer,
             "perplex/images",
-            "image",
+            "image"
           );
           imageUrl = result.secure_url;
           imagePublicId = result.public_id;
@@ -847,7 +849,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         } catch (uploadError) {
           console.error(
             "[STREAM] ❌ Image upload failed:",
-            uploadError.message,
+            uploadError.message
           );
         }
       }
@@ -860,7 +862,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
           const result = await uploadToCloudinary(
             documentFile.buffer,
             "perplex/documents",
-            "auto",
+            "auto"
           );
           documentUrl = result.secure_url;
           documentPublicId = result.public_id;
@@ -868,7 +870,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         } catch (uploadError) {
           console.error(
             "[STREAM] ❌ Document upload failed:",
-            uploadError.message,
+            uploadError.message
           );
         }
       }
@@ -941,7 +943,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     } catch (historyError) {
       console.error(
         "[STREAM] ⚠️ Failed to save search history:",
-        historyError.message,
+        historyError.message
       );
     }
 
@@ -953,7 +955,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     console.log(
       "[STREAM] Final response length:",
       fullResponse.length,
-      "characters",
+      "characters"
     );
     res.write(`data: ${JSON.stringify({ type: "close" })}\n\n`);
     if (typeof res.flush === "function") res.flush();
@@ -983,7 +985,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         message: "Stream error occurred",
         error: error.message,
         timestamp: new Date().toISOString(),
-      })}\n\n`,
+      })}\n\n`
     );
     // ensure heartbeat is cleared if set
     try {
@@ -1043,7 +1045,7 @@ router.post("/stop", auth, async (req, res) => {
 
     console.log(
       "[STOP] Stream stopped successfully. Partial response length:",
-      partialResponse?.length || 0,
+      partialResponse?.length || 0
     );
 
     res.json({
@@ -1159,7 +1161,7 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
     console.log(
       `[SIMPLE] Response received from ${model} - Length: ${
         response.length
-      } chars, Tokens used: ${completion.usage?.total_tokens || "N/A"}`,
+      } chars, Tokens used: ${completion.usage?.total_tokens || "N/A"}`
     );
 
     // Save messages to database
@@ -1210,7 +1212,7 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
     console.error("Chat error:", error);
     const { status, body } = toAIErrorResponse(
       error,
-      "Failed to get AI response",
+      "Failed to get AI response"
     );
     return res.status(status).json(body);
   }
@@ -1305,7 +1307,7 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
     }
 
     console.log(
-      `[ASK] Sending request to model: ${model}, Has image: ${!!imageFile}`,
+      `[ASK] Sending request to model: ${model}, Has image: ${!!imageFile}`
     );
 
     const completion = await openai.chat.completions.create({
@@ -1317,7 +1319,7 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
     console.log(
       `[ASK] Response received from ${model} - Length: ${
         response.length
-      } chars, Tokens used: ${completion.usage?.total_tokens || "N/A"}`,
+      } chars, Tokens used: ${completion.usage?.total_tokens || "N/A"}`
     );
 
     // Upload image to Cloudinary if present
@@ -1329,7 +1331,7 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
         const result = await uploadToCloudinary(
           imageFile.buffer,
           "perplex/images",
-          "image",
+          "image"
         );
         imageUrl = result.secure_url;
         imagePublicId = result.public_id;
@@ -1392,7 +1394,7 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
     console.error("Chat image/ask error:", error);
     const { status, body } = toAIErrorResponse(
       error,
-      "Failed to get AI response",
+      "Failed to get AI response"
     );
     return res.status(status).json(body);
   }
@@ -1489,7 +1491,7 @@ router.post("/voice", auth, upload.single("audio"), async (req, res) => {
     });
     const userText = transcriptResp.text || transcriptResp;
     console.log(
-      `[VOICE] Transcription received - Text length: ${userText.length} chars`,
+      `[VOICE] Transcription received - Text length: ${userText.length} chars`
     );
 
     // Step 2: Get AI response using gpt-5-nano
@@ -1508,7 +1510,7 @@ router.post("/voice", auth, upload.single("audio"), async (req, res) => {
     });
     const aiText = aiResp.choices[0]?.message?.content || "";
     console.log(
-      `[VOICE] Response received from ${chatModel} - Length: ${aiText.length} chars`,
+      `[VOICE] Response received from ${chatModel} - Length: ${aiText.length} chars`
     );
 
     // Step 3: Synthesize AI response to voice using OpenAI TTS
@@ -1541,7 +1543,7 @@ router.post("/voice", auth, upload.single("audio"), async (req, res) => {
     console.error("Voice chat error:", error);
     const { status, body } = toAIErrorResponse(
       error,
-      "Failed to process voice chat",
+      "Failed to process voice chat"
     );
     return res.status(status).json(body);
   }
@@ -1982,7 +1984,7 @@ router.post("/upload-audio", auth, upload.single("audio"), async (req, res) => {
       !allowedExtensions.includes(fileExtension)
     ) {
       console.log(
-        `[UPLOAD-AUDIO] Invalid file type: ${audioFile.mimetype}, extension: ${fileExtension}`,
+        `[UPLOAD-AUDIO] Invalid file type: ${audioFile.mimetype}, extension: ${fileExtension}`
       );
       return res.status(400).json({
         success: false,
@@ -1996,7 +1998,7 @@ router.post("/upload-audio", auth, upload.single("audio"), async (req, res) => {
     const pcm16Buffer = await convertToPCM16(audioFile.buffer);
 
     console.log(
-      `[UPLOAD-AUDIO] Conversion successful. PCM16 size: ${pcm16Buffer.length} bytes`,
+      `[UPLOAD-AUDIO] Conversion successful. PCM16 size: ${pcm16Buffer.length} bytes`
     );
 
     // Encode to base64 for JSON response
@@ -2051,7 +2053,7 @@ router.post("/tts", auth, async (req, res) => {
     console.log("  - Text length:", text ? text.length : 0, "characters");
     console.log(
       "  - Text preview:",
-      text ? text.substring(0, 100) + (text.length > 100 ? "..." : "") : "N/A",
+      text ? text.substring(0, 100) + (text.length > 100 ? "..." : "") : "N/A"
     );
     console.log("  - Voice:", voice);
     console.log("  - Instructions:", instructions ? "Provided" : "None");
@@ -2103,12 +2105,12 @@ router.post("/tts", auth, async (req, res) => {
     if (!validFormats.includes(response_format)) {
       console.log(
         "[TTS] ❌ Validation failed: Invalid response format:",
-        response_format,
+        response_format
       );
       return res.status(400).json({
         success: false,
         message: `Invalid response format. Valid options: ${validFormats.join(
-          ", ",
+          ", "
         )}`,
       });
     }
@@ -2144,7 +2146,7 @@ router.post("/tts", auth, async (req, res) => {
       console.log(
         "[TTS] Instructions added:",
         instructions.substring(0, 100) +
-          (instructions.length > 100 ? "..." : ""),
+          (instructions.length > 100 ? "..." : "")
       );
     }
 
@@ -2188,7 +2190,7 @@ router.post("/tts", auth, async (req, res) => {
     console.error("[TTS] ❌ Error:", error);
     const { status, body } = toAIErrorResponse(
       error,
-      "Failed to convert text to speech",
+      "Failed to convert text to speech"
     );
     return res.status(status).json(body);
   }
@@ -2260,7 +2262,7 @@ router.post("/tts/stream", auth, async (req, res) => {
       return res.status(400).json({
         success: false,
         message: `Invalid response format. Valid options: ${validFormats.join(
-          ", ",
+          ", "
         )}`,
       });
     }
@@ -2325,7 +2327,7 @@ router.post("/tts/stream", auth, async (req, res) => {
     if (!res.headersSent) {
       const { status, body } = toAIErrorResponse(
         error,
-        "Failed to stream text to speech",
+        "Failed to stream text to speech"
       );
       return res.status(status).json(body);
     }
