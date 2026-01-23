@@ -686,15 +686,21 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
               );
 
               // Extract image data from various possible structures
-              let imageData =
-                outputItem.result?.b64_json ||
-                outputItem.b64_json ||
-                outputItem.image_data ||
-                outputItem.image ||
-                outputItem.data;
+              // Check if result is a string directly (OpenAI Responses API format)
+              let imageData = null;
+              if (outputItem.result && typeof outputItem.result === "string") {
+                imageData = outputItem.result;
+              } else {
+                imageData =
+                  outputItem.result?.b64_json ||
+                  outputItem.b64_json ||
+                  outputItem.image_data ||
+                  outputItem.image ||
+                  outputItem.data;
+              }
               let revisedPrompt =
-                outputItem.result?.revised_prompt ||
                 outputItem.revised_prompt ||
+                outputItem.result?.revised_prompt ||
                 outputItem.prompt ||
                 "";
 
@@ -749,17 +755,26 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
 
         // Try to extract image data from various possible structures
         let imageData = null;
-        let revisedPrompt = "";
+        let revisedPrompt = item.revised_prompt || item.prompt || "";
 
-        // Check direct item properties first (most common in responses API)
-        imageData = item.b64_json || item.image_data || item.data;
-        revisedPrompt = item.revised_prompt || item.prompt || "";
+        // Check if item.result IS the base64 string directly (OpenAI Responses API format)
+        if (item.result && typeof item.result === "string") {
+          console.log(
+            "[STREAM] item.result is a string (base64 data directly)"
+          );
+          imageData = item.result;
+        }
 
-        // Check item.result (standard structure)
-        if (!imageData && item.result) {
+        // Check direct item properties
+        if (!imageData) {
+          imageData = item.b64_json || item.image_data || item.data;
+        }
+
+        // Check item.result as object (alternative structure)
+        if (!imageData && item.result && typeof item.result === "object") {
           const imageResult = item.result;
           console.log(
-            "[STREAM] Checking item.result, keys:",
+            "[STREAM] Checking item.result as object, keys:",
             Object.keys(imageResult)
           );
           imageData =
