@@ -630,6 +630,14 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       // Standard chat completion chunk: chunk.choices[0].delta
       // Responses API chunk: type="response.output_text.delta", delta="text"
 
+      // Debug logging for stream chunks
+      if (chunk.type && chunk.type.includes("image")) {
+        console.log(
+          "[STREAM] Image-related chunk received:",
+          JSON.stringify(chunk, null, 2)
+        );
+      }
+
       let delta = {};
       let reason = null;
 
@@ -644,9 +652,144 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         reason = "stop";
       } else if (
         chunk.type === "response.output_item.done" &&
+        chunk.item?.type === "image_generation_call"
+      ) {
+        // Handle native image generation results from the responses API
+        const item = chunk.item;
+        console.log(
+          "[STREAM] Image generation result received from responses API"
+        );
+        console.log(
+          "[STREAM] Image item structure:",
+          JSON.stringify(
+            item,
+            (key, value) => {
+              // Truncate base64 data for logging
+              if (typeof value === "string" && value.length > 100) {
+                return value.substring(0, 100) + "...[truncated]";
+              }
+              return value;
+            },
+            2
+          )
+        );
+
+        // Try to extract image data from various possible structures
+        let imageData = null;
+        let revisedPrompt = "";
+
+        // Check item.result (standard structure)
+        if (item.result) {
+          const imageResult = item.result;
+          imageData =
+            imageResult.b64_json || imageResult.image || imageResult.data;
+          revisedPrompt = imageResult.revised_prompt || item.call?.prompt || "";
+
+          // Check for URL-based response
+          if (!imageData && imageResult.url) {
+            generatedImages.push({
+              url: imageResult.url,
+              revised_prompt: revisedPrompt,
+            });
+
+            res.write(
+              `data: ${JSON.stringify({
+                type: "image",
+                url: imageResult.url,
+                revised_prompt: revisedPrompt,
+                timestamp: new Date().toISOString(),
+              })}\n\n`
+            );
+            if (typeof res.flush === "function") res.flush();
+            console.log("[STREAM] ✓ Image URL event sent to client");
+          }
+        }
+
+        // Check item.image (alternative structure)
+        if (!imageData && item.image) {
+          imageData = item.image.b64_json || item.image.data || item.image;
+          revisedPrompt =
+            item.image.revised_prompt || item.revised_prompt || "";
+        }
+
+        // Check item.output (another possible structure)
+        if (!imageData && item.output) {
+          if (Array.isArray(item.output)) {
+            // Handle array of images
+            for (const output of item.output) {
+              const imgData = output.b64_json || output.image || output.data;
+              const imgPrompt = output.revised_prompt || revisedPrompt;
+              if (imgData) {
+                generatedImages.push({
+                  b64_json: imgData,
+                  revised_prompt: imgPrompt,
+                });
+                res.write(
+                  `data: ${JSON.stringify({
+                    type: "image",
+                    b64_json: imgData,
+                    revised_prompt: imgPrompt,
+                    timestamp: new Date().toISOString(),
+                  })}\n\n`
+                );
+                if (typeof res.flush === "function") res.flush();
+              }
+            }
+            console.log("[STREAM] ✓ Image events sent from output array");
+          } else {
+            imageData =
+              item.output.b64_json || item.output.image || item.output.data;
+            revisedPrompt = item.output.revised_prompt || revisedPrompt;
+          }
+        }
+
+        // Send image event if we found base64 data
+        if (imageData && typeof imageData === "string") {
+          generatedImages.push({
+            b64_json: imageData,
+            revised_prompt: revisedPrompt,
+          });
+
+          res.write(
+            `data: ${JSON.stringify({
+              type: "image",
+              b64_json: imageData,
+              revised_prompt: revisedPrompt,
+              timestamp: new Date().toISOString(),
+            })}\n\n`
+          );
+          if (typeof res.flush === "function") res.flush();
+          console.log("[STREAM] ✓ Image b64 event sent to client");
+        }
+      } else if (
+        chunk.type === "response.output_item.added" &&
+        chunk.item?.type === "image_generation_call"
+      ) {
+        // Send progress event when image generation starts
+        console.log("[STREAM] Image generation started");
+        res.write(
+          `data: ${JSON.stringify({
+            type: "progress",
+            message: "Generating image...",
+            tool: "image_generation",
+            timestamp: new Date().toISOString(),
+          })}\n\n`
+        );
+        if (typeof res.flush === "function") res.flush();
+      } else if (
+        chunk.type === "response.output_item.done" &&
         chunk.item?.type === "function_call"
       ) {
         // Handle tool calls if they appear here (future proofing)
+      } else if (chunk.type && chunk.type.startsWith("response.")) {
+        // Log other responses API events for debugging
+        console.log("[STREAM] Unhandled responses API event:", chunk.type);
+        if (chunk.item?.type) {
+          console.log("[STREAM]   item.type:", chunk.item.type);
+        }
+        // Fallback/Generic
+        delta = chunk.delta || {};
+        reason = chunk.finish_reason;
       } else {
         // Fallback/Generic
         delta = chunk.delta || {};
@@ -906,7 +1049,8 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
           generatedImages:
             generatedImages.length > 0
               ? generatedImages.map((img) => ({
-                  url: img.url,
+                  url: img.url || undefined,
+                  b64_json: img.b64_json || undefined,
                   revised_prompt: img.revised_prompt,
                 }))
               : undefined,
