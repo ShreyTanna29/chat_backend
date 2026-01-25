@@ -113,6 +113,34 @@ async function performImageGeneration(
   }
 }
 
+// Helper function to upload base64 image to Cloudinary and return URL
+async function uploadBase64ToCloudinary(base64Data, revisedPrompt = "") {
+  try {
+    console.log("[CLOUDINARY] Uploading generated image...");
+    const imageBuffer = Buffer.from(base64Data, "base64");
+    const uploadResult = await uploadToCloudinary(
+      imageBuffer,
+      "perplex/generated-images",
+      "image"
+    );
+    console.log("[CLOUDINARY] ✓ Image uploaded:", uploadResult.secure_url);
+    return {
+      success: true,
+      url: uploadResult.secure_url,
+      publicId: uploadResult.public_id,
+      revised_prompt: revisedPrompt,
+    };
+  } catch (uploadError) {
+    console.error("[CLOUDINARY] ⚠️ Upload failed:", uploadError.message);
+    return {
+      success: false,
+      url: null,
+      publicId: null,
+      revised_prompt: revisedPrompt,
+    };
+  }
+}
+
 // Set up multer for image and document uploads
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -625,7 +653,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     let finishReason = null;
 
     // Helper to process stream chunks
-    const processChunk = (chunk) => {
+    const processChunk = async (chunk) => {
       // Adapt to different chunk structures if necessary
       // Standard chat completion chunk: chunk.choices[0].delta
       // Responses API chunk: type="response.output_text.delta", delta="text"
@@ -710,14 +738,20 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
               );
 
               if (imageData && typeof imageData === "string" && !alreadySent) {
+                // Upload to Cloudinary
+                const uploadResult = await uploadBase64ToCloudinary(
+                  imageData,
+                  revisedPrompt
+                );
                 generatedImages.push({
-                  b64_json: imageData,
+                  url: uploadResult.url,
+                  publicId: uploadResult.publicId,
                   revised_prompt: revisedPrompt,
                 });
                 res.write(
                   `data: ${JSON.stringify({
                     type: "image",
-                    b64_json: imageData,
+                    url: uploadResult.url,
                     revised_prompt: revisedPrompt,
                     timestamp: new Date().toISOString(),
                   })}\n\n`
@@ -822,14 +856,20 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
               const imgData = output.b64_json || output.image || output.data;
               const imgPrompt = output.revised_prompt || revisedPrompt;
               if (imgData) {
+                // Upload to Cloudinary
+                const uploadResult = await uploadBase64ToCloudinary(
+                  imgData,
+                  imgPrompt
+                );
                 generatedImages.push({
-                  b64_json: imgData,
+                  url: uploadResult.url,
+                  publicId: uploadResult.publicId,
                   revised_prompt: imgPrompt,
                 });
                 res.write(
                   `data: ${JSON.stringify({
                     type: "image",
-                    b64_json: imgData,
+                    url: uploadResult.url,
                     revised_prompt: imgPrompt,
                     timestamp: new Date().toISOString(),
                   })}\n\n`
@@ -872,21 +912,27 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
 
         // Send image event if we found base64 data
         if (imageData && typeof imageData === "string") {
+          // Upload to Cloudinary
+          const uploadResult = await uploadBase64ToCloudinary(
+            imageData,
+            revisedPrompt
+          );
           generatedImages.push({
-            b64_json: imageData,
+            url: uploadResult.url,
+            publicId: uploadResult.publicId,
             revised_prompt: revisedPrompt,
           });
 
           res.write(
             `data: ${JSON.stringify({
               type: "image",
-              b64_json: imageData,
+              url: uploadResult.url,
               revised_prompt: revisedPrompt,
               timestamp: new Date().toISOString(),
             })}\n\n`
           );
           if (typeof res.flush === "function") res.flush();
-          console.log("[STREAM] ✓ Image b64 event sent to client");
+          console.log("[STREAM] ✓ Image URL event sent to client");
         } else {
           console.log(
             "[STREAM] ⚠ No image data found in image_generation_call item"
@@ -935,14 +981,20 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
           for (const content of item.content) {
             const imgData = content.b64_json || content.data || content.image;
             if (imgData && typeof imgData === "string") {
+              // Upload to Cloudinary
+              const uploadResult = await uploadBase64ToCloudinary(
+                imgData,
+                content.revised_prompt || revisedPrompt
+              );
               generatedImages.push({
-                b64_json: imgData,
+                url: uploadResult.url,
+                publicId: uploadResult.publicId,
                 revised_prompt: content.revised_prompt || revisedPrompt,
               });
               res.write(
                 `data: ${JSON.stringify({
                   type: "image",
-                  b64_json: imgData,
+                  url: uploadResult.url,
                   revised_prompt: content.revised_prompt || revisedPrompt,
                   timestamp: new Date().toISOString(),
                 })}\n\n`
@@ -954,14 +1006,20 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         }
 
         if (imageData && typeof imageData === "string") {
+          // Upload to Cloudinary
+          const uploadResult = await uploadBase64ToCloudinary(
+            imageData,
+            revisedPrompt
+          );
           generatedImages.push({
-            b64_json: imageData,
+            url: uploadResult.url,
+            publicId: uploadResult.publicId,
             revised_prompt: revisedPrompt,
           });
           res.write(
             `data: ${JSON.stringify({
               type: "image",
-              b64_json: imageData,
+              url: uploadResult.url,
               revised_prompt: revisedPrompt,
               timestamp: new Date().toISOString(),
             })}\n\n`
@@ -986,14 +1044,20 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
           chunk.result?.revised_prompt || chunk.revised_prompt || "";
 
         if (imageData && typeof imageData === "string") {
+          // Upload to Cloudinary
+          const uploadResult = await uploadBase64ToCloudinary(
+            imageData,
+            revisedPrompt
+          );
           generatedImages.push({
-            b64_json: imageData,
+            url: uploadResult.url,
+            publicId: uploadResult.publicId,
             revised_prompt: revisedPrompt,
           });
           res.write(
             `data: ${JSON.stringify({
               type: "image",
-              b64_json: imageData,
+              url: uploadResult.url,
               revised_prompt: revisedPrompt,
               timestamp: new Date().toISOString(),
             })}\n\n`
@@ -1071,7 +1135,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         finishReason = "stopped";
         break;
       }
-      processChunk(chunk);
+      await processChunk(chunk);
     }
 
     // Handle tool calls if the stream ended with them
@@ -1120,15 +1184,43 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
           try {
             const resultObj = JSON.parse(result);
             if (resultObj.success && resultObj.b64_json) {
+              // Upload base64 image to Cloudinary
+              console.log(
+                "[STREAM] Uploading generated image to Cloudinary..."
+              );
+              let imageUrl = null;
+              let imagePublicId = null;
+              try {
+                const imageBuffer = Buffer.from(resultObj.b64_json, "base64");
+                const uploadResult = await uploadToCloudinary(
+                  imageBuffer,
+                  "perplex/generated-images",
+                  "image"
+                );
+                imageUrl = uploadResult.secure_url;
+                imagePublicId = uploadResult.public_id;
+                console.log(
+                  "[STREAM] ✓ Generated image uploaded to Cloudinary:",
+                  imageUrl
+                );
+              } catch (uploadError) {
+                console.error(
+                  "[STREAM] ⚠️ Failed to upload generated image to Cloudinary:",
+                  uploadError.message
+                );
+                // Fall back to base64 if upload fails
+              }
+
               generatedImages.push({
-                b64_json: resultObj.b64_json,
+                url: imageUrl,
                 revised_prompt: resultObj.revised_prompt,
+                publicId: imagePublicId,
               });
-              // Send image event
+              // Send image event with URL instead of base64
               res.write(
                 `data: ${JSON.stringify({
                   type: "image",
-                  b64_json: resultObj.b64_json,
+                  url: imageUrl,
                   revised_prompt: resultObj.revised_prompt,
                   timestamp: new Date().toISOString(),
                 })}\n\n`
@@ -1140,6 +1232,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
                 message: "Image generated successfully and sent to the user.",
                 revised_prompt: resultObj.revised_prompt,
                 image_delivered: true,
+                image_url: imageUrl,
               });
             }
           } catch (_) {}
@@ -1177,7 +1270,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
           finishReason = "stopped";
           break;
         }
-        processChunk(chunk);
+        await processChunk(chunk);
       }
     }
 
@@ -1273,7 +1366,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
             generatedImages.length > 0
               ? generatedImages.map((img) => ({
                   url: img.url || undefined,
-                  b64_json: img.b64_json || undefined,
+                  publicId: img.publicId || undefined,
                   revised_prompt: img.revised_prompt,
                 }))
               : undefined,
