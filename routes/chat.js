@@ -704,6 +704,8 @@ RESEARCH MODE INSTRUCTIONS:
 8. Always acknowledge the date/time context of the information you find.
 9. Cross-reference facts across multiple sources for accuracy.
 10. Format your response in markdown with proper headings and structure.
+11. Always summarize your findings at the end.
+12. Always ask a follow-up question to keep the conversation going.
 
 Your goal is to be the most thorough research assistant possible, leaving no stone unturned in finding accurate, up-to-date information.`,
       });
@@ -726,6 +728,7 @@ THINK MODE INSTRUCTIONS:
 9. If you're uncertain about something, acknowledge it and explain why.
 10. Format your response in markdown with clear structure for complex explanations.
 11. Always summarize your findings at the end.
+12. Always ask a follow-up question to keep the conversation going.
 
 You have access to web search for current information and image generation if needed. Use these tools when they would enhance your analysis.`,
       });
@@ -734,7 +737,7 @@ You have access to web search for current information and image generation if ne
       // QUICK MODE (default): Fast, concise responses - SHORT system prompt for speed
       messages.push({
         role: "system",
-        content: `You are Erudite AIC, a fast AI assistant. Be direct and concise. Use markdown. Give short, accurate answers. Give long answers if required but always summarize your findings at the end if its a long answer.`,
+        content: `You are Erudite AIC, a fast AI assistant. Be direct and concise. Use markdown. Give short, accurate answers. Give long answers if required but always summarize your findings at the end if its a long answer. Always ask a follow-up question to keep the conversation going.`,
       });
       console.log("[STREAM] Added QUICK MODE system prompt");
     }
