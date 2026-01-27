@@ -63,6 +63,107 @@ function toAIErrorResponse(err, fallbackMessage = "AI service error") {
 // Perform web search via Tavily if configured; otherwise return a helpful message
 // Web search is now handled natively by the model
 
+// Helper: Detect if the prompt requires web search
+function needsWebSearch(prompt) {
+  if (!prompt) return false;
+  const lowerPrompt = prompt.toLowerCase();
+
+  // Keywords that indicate web search is needed
+  const searchKeywords = [
+    "search",
+    "look up",
+    "lookup",
+    "find out",
+    "google",
+    "weather",
+    "today",
+    "current",
+    "latest",
+    "recent",
+    "news",
+    "price",
+    "stock",
+    "market",
+    "live",
+    "now",
+    "real-time",
+    "realtime",
+    "what is the",
+    "who is",
+    "where is",
+    "when is",
+    "how much",
+    "score",
+    "result",
+    "update",
+    "happening",
+    "trending",
+    "internet",
+    "online",
+    "web",
+    "browse",
+    "2024",
+    "2025",
+    "2026", // Recent years indicate need for current info
+  ];
+
+  return searchKeywords.some((keyword) => lowerPrompt.includes(keyword));
+}
+
+// Helper: Detect if the prompt requires image generation
+function needsImageGeneration(prompt) {
+  if (!prompt) return false;
+  const lowerPrompt = prompt.toLowerCase();
+
+  // Keywords that indicate image generation is needed
+  const imageKeywords = [
+    "create image",
+    "create an image",
+    "create a image",
+    "generate image",
+    "generate an image",
+    "generate a image",
+    "make image",
+    "make an image",
+    "make a image",
+    "draw",
+    "drawing",
+    "sketch",
+    "create picture",
+    "create a picture",
+    "generate picture",
+    "make picture",
+    "make a picture",
+    "create art",
+    "generate art",
+    "make art",
+    "create illustration",
+    "generate illustration",
+    "create visual",
+    "generate visual",
+    "design a",
+    "design an",
+    "paint",
+    "painting",
+    "render",
+    "rendering",
+    "create logo",
+    "generate logo",
+    "make logo",
+    "create icon",
+    "generate icon",
+    "visualize",
+    "visualization",
+    "image of",
+    "picture of",
+    "photo of",
+    "dall-e",
+    "dalle",
+  ];
+
+  return imageKeywords.some((keyword) => lowerPrompt.includes(keyword));
+}
+
 // Perform image generation via DALL-E
 async function performImageGeneration(
   prompt,
@@ -421,19 +522,66 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
 
     // Use different system prompts based on mode
     if (researchMode) {
+      // RESEARCH MODE: Comprehensive web research
       messages.push({
         role: "system",
-        content:
-          "You are an advanced research assistant with comprehensive web search capabilities. Your primary function is to conduct thorough, in-depth research on any topic the user asks about. IMPORTANT INSTRUCTIONS FOR RESEARCH MODE:\n\n1. ALWAYS use the web_search function to gather information - this is mandatory for every query.\n2. Perform MULTIPLE web searches with different query variations to get comprehensive coverage of the topic.\n3. Synthesize information from multiple sources to provide well-rounded, accurate answers.\n4. Include relevant sources and citations in your responses.\n5. Look for the most recent and authoritative information available.\n6. If the topic is complex, break it down and research each aspect separately.\n7. Provide detailed, well-structured responses with clear sections and bullet points where appropriate.\n8. Always acknowledge the date/time context of the information you find.\n9. Always format your response in markdown.\n\nYour goal is to be the most thorough research assistant possible, leaving no stone unturned in finding accurate, up-to-date information.",
+        content: `You are Erudite AIC an advanced research assistant with comprehensive web search capabilities. Your primary function is to conduct thorough, in-depth research on any topic the user asks about.
+
+RESEARCH MODE INSTRUCTIONS:
+1. ALWAYS use the web_search function to gather information - this is mandatory for every query.
+2. Perform MULTIPLE web searches with different query variations to get comprehensive coverage.
+3. Synthesize information from multiple sources to provide well-rounded, accurate answers.
+4. Include relevant sources and citations in your responses.
+5. Look for the most recent and authoritative information available.
+6. If the topic is complex, break it down and research each aspect separately.
+7. Provide detailed, well-structured responses with clear sections and bullet points.
+8. Always acknowledge the date/time context of the information you find.
+9. Cross-reference facts across multiple sources for accuracy.
+10. Format your response in markdown with proper headings and structure.
+
+Your goal is to be the most thorough research assistant possible, leaving no stone unturned in finding accurate, up-to-date information.`,
       });
       console.log("[STREAM] Added RESEARCH MODE system prompt");
-    } else {
+    } else if (thinkMode) {
+      // THINK MODE: Deep reasoning and analysis
       messages.push({
         role: "system",
-        content:
-          "You are a helpful AI assistant with web search and image generation capabilities. IMPORTANT: When the user asks about current events, news, today's information, real-time data, recent updates, or anything that requires up-to-date information, you MUST use the web_search function to get accurate, current information. Always prefer using web search for questions about 'today', 'now', 'current', 'latest', 'recent', or 'what's happening'. When the user asks to create, generate, draw, or make an image, picture, or artwork, use the generate_image function with a detailed, descriptive prompt. If an image is provided, analyze it and answer the user's question based on both the image and the prompt. If a document is provided, analyze its content and answer based on the document, the prompt, and any other context. Always format your response in markdown.",
+        content: `You are Erudite AIC an advanced AI assistant optimized for deep thinking, complex reasoning, and thorough analysis.
+
+THINK MODE INSTRUCTIONS:
+1. Take your time to think through problems step by step.
+2. Break down complex questions into smaller, manageable parts.
+3. Consider multiple perspectives and approaches before arriving at conclusions.
+4. Show your reasoning process - explain HOW you arrive at answers, not just WHAT the answer is.
+5. For technical or mathematical problems, work through the logic methodically.
+6. Identify assumptions, edge cases, and potential limitations in your analysis.
+7. When appropriate, consider counterarguments or alternative viewpoints.
+8. Provide comprehensive, well-reasoned responses rather than quick surface-level answers.
+9. If you're uncertain about something, acknowledge it and explain why.
+10. Format your response in markdown with clear structure for complex explanations.
+
+You have access to web search for current information and image generation if needed. Use these tools when they would enhance your analysis.`,
       });
-      console.log("[STREAM] Added system prompt with tool instructions");
+      console.log("[STREAM] Added THINK MODE system prompt");
+    } else {
+      // QUICK MODE (default): Fast, concise responses
+      messages.push({
+        role: "system",
+        content: `You are Erudite AIC a fast, helpful AI assistant optimized for quick and concise responses.
+
+QUICK MODE INSTRUCTIONS:
+1. Provide direct, to-the-point answers without unnecessary elaboration.
+2. Get to the answer quickly - users want fast responses.
+3. Use bullet points or short paragraphs for clarity.
+4. Only use web search if the question specifically requires current/real-time information.
+5. Only use image generation if the user explicitly asks to create an image.
+6. Keep responses concise but complete - don't sacrifice accuracy for brevity.
+7. If analyzing an image or document, focus on the key relevant details.
+8. Format in markdown but keep it simple - avoid overly complex structures.
+
+Be efficient and helpful. Users in quick mode want answers fast.`,
+      });
+      console.log("[STREAM] Added QUICK MODE system prompt");
     }
 
     // Add conversation history if exists
@@ -508,12 +656,26 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     }
     console.log("[STREAM] Total messages in context:", messages.length);
 
-    // Define tools for function calling (web search and image generation)
-    const tools = [
-      {
-        type: "web_search",
-      },
-      {
+    // Determine which tools are needed based on the prompt
+    const promptText = userMessageContent || prompt || "";
+    const requiresWebSearch = researchMode || needsWebSearch(promptText);
+    const requiresImageGen = needsImageGeneration(promptText);
+
+    console.log("[STREAM] Tool detection:", {
+      requiresWebSearch,
+      requiresImageGen,
+      researchMode,
+    });
+
+    // Build tools array conditionally - only include tools when needed
+    const tools = [];
+
+    if (requiresWebSearch) {
+      tools.push({ type: "web_search" });
+    }
+
+    if (requiresImageGen) {
+      tools.push({
         type: "function",
         function: {
           name: "generate_image",
@@ -543,13 +705,15 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
             required: ["prompt"],
           },
         },
-      },
-    ];
+      });
+    }
 
-    // Determine tool choice based on query content and mode
-    // Research mode ALWAYS forces web search
-    const toolChoice = "auto";
-    console.log("[STREAM] Tool choice strategy:", toolChoice);
+    // Only set tool choice if we have tools
+    const toolChoice = tools.length > 0 ? "auto" : undefined;
+    console.log(
+      "[STREAM] Tools enabled:",
+      tools.length > 0 ? tools.map((t) => t.type || t.function?.name) : "none"
+    );
 
     // Determine if we should use the new 'responses' API (if available) or standard chat completions
     // The user requested to use the SDK's web search tool which is often associated with the 'responses' API
@@ -582,68 +746,31 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
 
       console.log("[STREAM] Starting stream with responses API. Model:", model);
 
+      // Build tools for responses API conditionally
+      const responsesTools = [];
+      if (requiresWebSearch) responsesTools.push({ type: "web_search" });
+      if (requiresImageGen) responsesTools.push({ type: "image_generation" });
+
       stream = await openai.responses.create({
         model,
         input: inputString,
-        tools: [{ type: "web_search" }, { type: "image_generation" }],
+        ...(responsesTools.length > 0 && { tools: responsesTools }),
         stream: true,
       });
     } else {
       // Fallback to standard chat completions
-      // Define tools for function calling (web search and image generation)
-      const tools = [
-        {
-          type: "web_search",
-        },
-        {
-          type: "function",
-          function: {
-            name: "generate_image",
-            description:
-              "Generate an image using DALL-E based on a text description. Use this when the user asks to create, generate, draw, or make an image, picture, illustration, artwork, or visual content. Always use detailed and descriptive prompts for best results.",
-            parameters: {
-              type: "object",
-              properties: {
-                prompt: {
-                  type: "string",
-                  description:
-                    "A detailed description of the image to generate. Be specific about style, colors, composition, and details. Maximum 4000 characters.",
-                },
-                size: {
-                  type: "string",
-                  enum: ["1024x1024", "1536x1024", "1024x1536", "auto"],
-                  description:
-                    "The size of the generated image. Use 1024x1024 for square, 1536x1024 for landscape, 1024x1536 for portrait, or auto to let the model decide. Default is 1024x1024.",
-                },
-                quality: {
-                  type: "string",
-                  enum: ["low", "medium", "high", "auto"],
-                  description:
-                    "The quality of the generated image. Higher quality takes longer. Default is auto.",
-                },
-              },
-              required: ["prompt"],
-            },
-          },
-        },
-      ];
-
-      // Determine tool choice based on query content and mode
-      const toolChoice = "auto";
-      console.log("[STREAM] Tool choice strategy:", toolChoice);
-
       console.log(
         "[STREAM] Starting stream with chat completions. Model:",
         model
       );
 
       // Start streaming immediately - NO PREFLIGHT
+      // Only include tools if any are needed
       stream = await openai.chat.completions.create({
         model,
         messages,
         stream: true,
-        tools,
-        tool_choice: toolChoice,
+        ...(tools.length > 0 && { tools, tool_choice: toolChoice }),
       });
     }
 
