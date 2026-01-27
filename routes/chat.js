@@ -1700,7 +1700,67 @@ You have access to web search for current information and image generation if ne
       }
     }
 
-    // Send done event
+    // Upload files to Cloudinary BEFORE sending done event so URLs can be included
+    let imageUrl = null;
+    let imagePublicId = null;
+    let documentUrl = null;
+    let documentPublicId = null;
+
+    // Upload image and document in parallel for efficiency
+    const uploadPromises = [];
+
+    if (imageFile) {
+      uploadPromises.push(
+        (async () => {
+          console.log("[STREAM] Uploading image to Cloudinary...");
+          try {
+            const result = await uploadToCloudinary(
+              imageFile.buffer,
+              "perplex/images",
+              "image"
+            );
+            imageUrl = result.secure_url;
+            imagePublicId = result.public_id;
+            console.log("[STREAM] ✓ Image uploaded:", imageUrl);
+          } catch (uploadError) {
+            console.error(
+              "[STREAM] ❌ Image upload failed:",
+              uploadError.message
+            );
+          }
+        })()
+      );
+    }
+
+    if (documentFile) {
+      uploadPromises.push(
+        (async () => {
+          console.log("[STREAM] Uploading document to Cloudinary...");
+          try {
+            const result = await uploadToCloudinary(
+              documentFile.buffer,
+              "perplex/documents",
+              "raw"
+            );
+            documentUrl = result.secure_url;
+            documentPublicId = result.public_id;
+            console.log("[STREAM] ✓ Document uploaded:", documentUrl);
+          } catch (uploadError) {
+            console.error(
+              "[STREAM] ❌ Document upload failed:",
+              uploadError.message
+            );
+          }
+        })()
+      );
+    }
+
+    // Wait for all uploads to complete
+    if (uploadPromises.length > 0) {
+      await Promise.all(uploadPromises);
+    }
+
+    // Send done event with document/image URLs included
     console.log(`[STREAM] ✓ Stream completed. Length: ${fullResponse.length}`);
     console.log(
       `[STREAM] Citations: ${citations.length}, Images: ${generatedImages.length}`
@@ -1713,6 +1773,19 @@ You have access to web search for current information and image generation if ne
         citations: citations.length > 0 ? citations : undefined,
         generated_images:
           generatedImages.length > 0 ? generatedImages : undefined,
+        // Include uploaded file URLs
+        uploaded_image: imageUrl
+          ? { url: imageUrl, publicId: imagePublicId }
+          : undefined,
+        uploaded_document: documentUrl
+          ? {
+              url: documentUrl,
+              publicId: documentPublicId,
+              name: documentMetadata?.filename,
+              type: documentMetadata?.mimetype,
+              size: documentMetadata?.originalSize,
+            }
+          : undefined,
         timestamp: new Date().toISOString(),
       })}\n\n`
     );
@@ -1746,53 +1819,10 @@ You have access to web search for current information and image generation if ne
 
     // Save messages to database asynchronously (fire-and-forget)
     // This runs after the response is sent to the client
+    // Note: imageUrl, imagePublicId, documentUrl, documentPublicId are already set from uploads above
     (async () => {
       console.log("[STREAM-BG] Saving messages to database...");
       try {
-        // Upload files to Cloudinary if present
-        let imageUrl = null;
-        let imagePublicId = null;
-        if (imageFile) {
-          console.log("[STREAM-BG] Uploading image to Cloudinary...");
-          try {
-            const result = await uploadToCloudinary(
-              imageFile.buffer,
-              "perplex/images",
-              "image"
-            );
-            imageUrl = result.secure_url;
-            imagePublicId = result.public_id;
-            console.log("[STREAM-BG] ✓ Image uploaded:", imageUrl);
-          } catch (uploadError) {
-            console.error(
-              "[STREAM-BG] ❌ Image upload failed:",
-              uploadError.message
-            );
-          }
-        }
-
-        // Upload document to Cloudinary with public access
-        let documentUrl = null;
-        let documentPublicId = null;
-        if (documentFile) {
-          console.log("[STREAM-BG] Uploading document to Cloudinary...");
-          try {
-            const result = await uploadToCloudinary(
-              documentFile.buffer,
-              "perplex/documents",
-              "raw" // Use 'raw' for documents to ensure proper handling
-            );
-            documentUrl = result.secure_url;
-            documentPublicId = result.public_id;
-            console.log("[STREAM-BG] ✓ Document uploaded:", documentUrl);
-          } catch (uploadError) {
-            console.error(
-              "[STREAM-BG] ❌ Document upload failed:",
-              uploadError.message
-            );
-          }
-        }
-
         // Save user message (without document content - only store original prompt)
         console.log("[STREAM-BG] Saving user message...");
         await Conversation.addMessage(conversation.id, {
