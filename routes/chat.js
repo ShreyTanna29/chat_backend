@@ -445,7 +445,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     } else if (thinkMode) {
       model = "gpt-5.2-2025-12-11"; // Good reasoning capabilities
     } else {
-      model = "gpt-5-nano-2025-08-07"; // Fastest for quick responses
+      model = "gpt-4o-mini"; // Fastest for quick responses
     }
     console.log("[STREAM] Model selected:", model);
     if (researchMode) {
@@ -725,6 +725,7 @@ THINK MODE INSTRUCTIONS:
 8. Provide comprehensive, well-reasoned responses rather than quick surface-level answers.
 9. If you're uncertain about something, acknowledge it and explain why.
 10. Format your response in markdown with clear structure for complex explanations.
+11. Always summarize your findings at the end.
 
 You have access to web search for current information and image generation if needed. Use these tools when they would enhance your analysis.`,
       });
@@ -733,7 +734,7 @@ You have access to web search for current information and image generation if ne
       // QUICK MODE (default): Fast, concise responses - SHORT system prompt for speed
       messages.push({
         role: "system",
-        content: `You are Erudite AIC, a fast AI assistant. Be direct and concise. Use markdown. Give short, accurate answers.`,
+        content: `You are Erudite AIC, a fast AI assistant. Be direct and concise. Use markdown. Give short, accurate answers. Give long answers if required but always summarize your findings at the end if its a long answer.`,
       });
       console.log("[STREAM] Added QUICK MODE system prompt");
     }
