@@ -12,18 +12,23 @@ cloudinary.config({
  * @param {Buffer} buffer - The file buffer
  * @param {string} folder - The folder to upload to
  * @param {string} resourceType - 'image', 'video', 'raw', or 'auto'
+ * @param {Object} options - Additional upload options
  * @returns {Promise<Object>} - The Cloudinary upload result
  */
 const uploadToCloudinary = (
   buffer,
   folder = "perplex/uploads",
-  resourceType = "auto"
+  resourceType = "auto",
+  options = {}
 ) => {
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
       {
         folder: folder,
         resource_type: resourceType,
+        type: "upload", // Ensures the file is publicly accessible
+        access_mode: "public", // Explicitly set public access
+        ...options,
       },
       (error, result) => {
         if (error) {

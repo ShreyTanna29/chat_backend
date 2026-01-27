@@ -766,25 +766,36 @@ You have access to web search for current information and image generation if ne
     }
 
     // Add current user message
-    let userMessageContent = prompt || "";
+    // Keep original prompt separate from AI message content (which may include document)
+    const originalUserPrompt = prompt || "";
+    let userMessageContent = originalUserPrompt;
 
-    // Append document content to the user message if provided
+    // Append document content to the AI message (but NOT to what we store)
+    // Document content is only sent to AI, not stored in database
+    let aiMessageContent = userMessageContent;
     if (documentContent) {
       const docPrefix = `\n\n--- Document: ${
         documentMetadata?.filename || "uploaded document"
       } ---\n`;
       const docSuffix = "\n--- End of Document ---\n";
-      userMessageContent =
+      aiMessageContent =
         (userMessageContent || "Please analyze this document.") +
         docPrefix +
         documentContent +
         docSuffix;
-      console.log("[STREAM] Document content appended to user message");
+      // Update userMessageContent for display purposes only if no prompt provided
+      if (!userMessageContent) {
+        userMessageContent = "Please analyze this document.";
+      }
+      console.log(
+        "[STREAM] Document content appended to AI message (not stored)"
+      );
     }
 
     // Default prompt if only image is provided
     if (!userMessageContent && imageFile) {
       userMessageContent = "What is in this image?";
+      aiMessageContent = userMessageContent;
     }
 
     console.log("[STREAM] Adding current user message...");
@@ -794,7 +805,7 @@ You have access to web search for current information and image generation if ne
       messages.push({
         role: "user",
         content: [
-          { type: "text", text: userMessageContent },
+          { type: "text", text: aiMessageContent },
           {
             type: "image_url",
             image_url: {
@@ -808,12 +819,12 @@ You have access to web search for current information and image generation if ne
         base64Image.length
       );
       if (documentContent) {
-        console.log("[STREAM] ✓ Document content also included in message");
+        console.log("[STREAM] ✓ Document content also included in AI message");
       }
     } else {
-      messages.push({ role: "user", content: userMessageContent });
+      messages.push({ role: "user", content: aiMessageContent });
       if (documentContent) {
-        console.log("[STREAM] ✓ User message with document content added");
+        console.log("[STREAM] ✓ AI message includes document content");
       } else {
         console.log("[STREAM] ✓ Text-only user message added");
       }
@@ -1760,6 +1771,7 @@ You have access to web search for current information and image generation if ne
           }
         }
 
+        // Upload document to Cloudinary with public access
         let documentUrl = null;
         let documentPublicId = null;
         if (documentFile) {
@@ -1768,7 +1780,7 @@ You have access to web search for current information and image generation if ne
             const result = await uploadToCloudinary(
               documentFile.buffer,
               "perplex/documents",
-              "auto"
+              "raw" // Use 'raw' for documents to ensure proper handling
             );
             documentUrl = result.secure_url;
             documentPublicId = result.public_id;
@@ -1781,11 +1793,11 @@ You have access to web search for current information and image generation if ne
           }
         }
 
-        // Save user message
+        // Save user message (without document content - only store original prompt)
         console.log("[STREAM-BG] Saving user message...");
         await Conversation.addMessage(conversation.id, {
           role: "user",
-          content: userMessageContent,
+          content: userMessageContent, // Store original prompt, not the full AI message with doc content
           metadata: {
             hasImage: !!imageFile,
             imageType: imageFile?.mimetype,
