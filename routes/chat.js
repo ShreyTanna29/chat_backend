@@ -76,41 +76,139 @@ function toAIErrorResponse(err, fallbackMessage = "AI service error") {
 // Perform web search via Tavily if configured; otherwise return a helpful message
 // Web search is now handled natively by the model
 
-// Helper: Detect if the prompt requires web search
+// Helper: Detect if the prompt requires web search (used for Quick Mode only)
+// Think Mode and Research Mode always have web search enabled
 function needsWebSearch(prompt) {
   if (!prompt) return false;
   const lowerPrompt = prompt.toLowerCase();
 
-  // Keywords that STRONGLY indicate web search is needed
-  // Be more conservative to avoid unnecessary tool overhead
+  // Keywords that indicate web search is needed for Quick Mode
   const searchKeywords = [
+    // Explicit search requests
+    "search",
+    "look up",
+    "lookup",
+    "google",
+    "find out",
+    "find me",
+    "browse",
+    "check online",
     "search the web",
+    "search web",
     "search online",
-    "search internet",
-    "search for",
-    "look up online",
-    "google it",
-    "google this",
-    "weather today",
-    "weather tomorrow",
-    "weather forecast",
-    "current news",
-    "latest news",
-    "recent news",
-    "breaking news",
-    "today's news",
-    "stock price",
-    "current price",
-    "live score",
-    "match score",
-    "game score",
+
+    // Weather queries
+    "weather",
+    "temperature",
+    "forecast",
+    "humidity",
+    "rain today",
+    "will it rain",
+    "is it cold",
+    "is it hot",
+
+    // News and current events
+    "news",
+    "headlines",
+    "breaking",
+    "latest",
+    "recent",
+    "what happened",
     "what's happening",
-    "trending now",
+    "trending",
+
+    // Financial/market data
+    "stock",
+    "share price",
+    "market",
+    "crypto",
+    "bitcoin",
+    "ethereum",
+    "exchange rate",
+    "currency",
+    "forex",
+    "nifty",
+    "sensex",
+
+    // Sports scores and results
+    "score",
+    "match result",
+    "who won",
+    "game result",
+    "standings",
+    "ipl",
+    "world cup",
+    "premier league",
+    "nba",
+    "nfl",
+
+    // Real-time information
+    "live",
     "real-time",
     "realtime",
-    "live update",
-    "browse the web",
-    "search the internet",
+    "right now",
+    "currently",
+    "today",
+    "yesterday",
+    "this week",
+    "this month",
+
+    // Location-based queries
+    "near me",
+    "nearby",
+    "open now",
+    "hours of",
+    "location of",
+    "directions to",
+    "how to get to",
+    "address of",
+
+    // Product/price queries
+    "price of",
+    "cost of",
+    "how much is",
+    "buy",
+    "purchase",
+    "deals on",
+    "discount",
+    "sale on",
+    "cheapest",
+
+    // People and entities (current info)
+    "net worth",
+    "age of",
+    "birthday",
+    "who is the current",
+    "ceo of",
+    "founder of",
+    "president of",
+    "prime minister",
+
+    // Events and releases
+    "release date",
+    "when is",
+    "schedule",
+    "upcoming",
+    "event",
+    "concert",
+    "movie release",
+    "launch date",
+
+    // Tech and updates
+    "latest version",
+    "new update",
+    "changelog",
+    "patch notes",
+    "ios",
+    "android",
+    "windows",
+    "update",
+
+    // Year references (likely needs current info)
+    "2024",
+    "2025",
+    "2026",
+    "2027",
   ];
 
   return searchKeywords.some((keyword) => lowerPrompt.includes(keyword));
@@ -718,15 +816,21 @@ You have access to web search for current information and image generation if ne
     }
     console.log("[STREAM] Total messages in context:", messages.length);
 
-    // Determine which tools are needed based on the prompt
+    // Determine which tools are needed based on the prompt and mode
     const promptText = userMessageContent || prompt || "";
-    const requiresWebSearch = researchMode || needsWebSearch(promptText);
     const requiresImageGen = needsImageGeneration(promptText);
+
+    // Web search logic:
+    // - Research Mode: ALWAYS enable web search (AI decides when to use)
+    // - Think Mode: ALWAYS enable web search (AI decides when to use)
+    // - Quick Mode: Only enable if keywords match (for speed)
+    const requiresWebSearch =
+      researchMode || thinkMode || needsWebSearch(promptText);
 
     console.log("[STREAM] Tool detection:", {
       requiresWebSearch,
       requiresImageGen,
-      researchMode,
+      mode: researchMode ? "research" : thinkMode ? "think" : "quick",
     });
 
     // Build tools array conditionally - only include tools when needed
