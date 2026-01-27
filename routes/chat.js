@@ -441,11 +441,11 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     // - Research Mode: gpt-4o with web search
     let model;
     if (researchMode) {
-      model = "gpt-4o"; // Best for research with web search
+      model = "gpt-5.2-2025-12-11"; // Best for research with web search
     } else if (thinkMode) {
-      model = "gpt-4o"; // Good reasoning capabilities
+      model = "gpt-5.2-2025-12-11"; // Good reasoning capabilities
     } else {
-      model = "gpt-4o-mini"; // Fastest for quick responses
+      model = "gpt-5-mini-2025-08-07"; // Fastest for quick responses
     }
     console.log("[STREAM] Model selected:", model);
     if (researchMode) {
