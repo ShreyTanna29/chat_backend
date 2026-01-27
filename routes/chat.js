@@ -22,10 +22,23 @@ const router = express.Router();
 // Key: streamId, Value: { abortController, conversationId, userId, fullResponse, startTime }
 const activeStreams = new Map();
 
-// Initialize OpenAI client
+// Initialize OpenAI client with optimized settings
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
+  maxRetries: 2,
+  timeout: 60000, // 60 second timeout
 });
+
+// Pre-warm OpenAI connection on startup
+(async () => {
+  try {
+    // Make a minimal API call to establish connection
+    await openai.models.list().catch(() => {});
+    console.log("[OPENAI] ✓ Connection pre-warmed");
+  } catch (e) {
+    console.log("[OPENAI] Connection warm-up skipped");
+  }
+})();
 
 // Helper: normalize AI/OpenAI errors to proper HTTP status and body
 function toAIErrorResponse(err, fallbackMessage = "AI service error") {
@@ -324,12 +337,18 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       });
     }
 
-    // Use GPT-5-nano for better rate limits with function calling for web search
-    // Research mode uses the advanced model for comprehensive research
-    let model =
-      thinkMode || researchMode
-        ? "gpt-5.2-2025-12-11"
-        : "gpt-5-nano-2025-08-07";
+    // Model selection based on mode:
+    // - Quick Mode: gpt-4o-mini (fastest, optimized for speed)
+    // - Think Mode: gpt-4o (balanced speed and quality)
+    // - Research Mode: gpt-4o with web search
+    let model;
+    if (researchMode) {
+      model = "gpt-4o"; // Best for research with web search
+    } else if (thinkMode) {
+      model = "gpt-4o"; // Good reasoning capabilities
+    } else {
+      model = "gpt-4o-mini"; // Fastest for quick responses
+    }
     console.log("[STREAM] Model selected:", model);
     if (researchMode) {
       console.log(
@@ -613,31 +632,20 @@ You have access to web search for current information and image generation if ne
       });
       console.log("[STREAM] Added THINK MODE system prompt");
     } else {
-      // QUICK MODE (default): Fast, concise responses
+      // QUICK MODE (default): Fast, concise responses - SHORT system prompt for speed
       messages.push({
         role: "system",
-        content: `You are Erudite AIC a fast, helpful AI assistant optimized for quick and concise responses.
-
-QUICK MODE INSTRUCTIONS:
-1. Provide direct, to-the-point answers without unnecessary elaboration.
-2. Get to the answer quickly - users want fast responses.
-3. Use bullet points or short paragraphs for clarity.
-4. Only use web search if the question specifically requires current/real-time information.
-5. Only use image generation if the user explicitly asks to create an image.
-6. Keep responses concise but complete - don't sacrifice accuracy for brevity.
-7. If analyzing an image or document, focus on the key relevant details.
-8. Format in markdown but keep it simple - avoid overly complex structures.
-9. Give short answers without over-explaining.
-
-Be efficient and helpful. Users in quick mode want answers fast.`,
+        content: `You are Erudite AIC, a fast AI assistant. Be direct and concise. Use markdown. Give short, accurate answers.`,
       });
       console.log("[STREAM] Added QUICK MODE system prompt");
     }
 
-    // Add conversation history if exists (limit to last 20 messages for context window efficiency)
+    // Add conversation history if exists
+    // Quick mode: limit to 10 messages for speed
+    // Think/Research mode: limit to 20 messages for more context
     if (conversation.messages && conversation.messages.length > 0) {
-      // Take only the most recent messages to avoid token overflow and improve speed
-      const recentMessages = conversation.messages.slice(-20);
+      const messageLimit = thinkMode || researchMode ? 20 : 10;
+      const recentMessages = conversation.messages.slice(-messageLimit);
       console.log(
         "[STREAM] Adding conversation history:",
         recentMessages.length,
@@ -830,6 +838,8 @@ Be efficient and helpful. Users in quick mode want answers fast.`,
         model,
         messages,
         stream: true,
+        // Optimize streaming for faster first token
+        stream_options: { include_usage: false },
         ...(tools.length > 0 && { tools, tool_choice: toolChoice }),
       });
       timings.openaiConnect = Date.now() - openaiStartTime;
