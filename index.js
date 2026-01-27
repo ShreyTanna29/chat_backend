@@ -30,6 +30,7 @@ initVoiceChat(server);
 // Graceful shutdown
 process.on("SIGINT", async () => {
   console.log("Shutting down gracefully...");
+  stopAllReminders();
   closeAllSessions();
   await prisma.$disconnect();
   process.exit(0);
@@ -37,6 +38,7 @@ process.on("SIGINT", async () => {
 
 process.on("SIGTERM", async () => {
   console.log("Shutting down gracefully...");
+  stopAllReminders();
   closeAllSessions();
   await prisma.$disconnect();
   process.exit(0);
@@ -46,9 +48,19 @@ process.on("SIGTERM", async () => {
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/chat", require("./routes/chat"));
 app.use("/api/discover", require("./routes/discover"));
+app.use("/api/reminders", require("./routes/reminders"));
 
 // Initialize discover cron job
 require("./routes/discover").initDiscoverCron();
+
+// Initialize reminder scheduler
+const {
+  initializeScheduler,
+  stopAllReminders,
+} = require("./utils/reminderScheduler");
+initializeScheduler().catch((err) =>
+  console.error("Failed to initialize reminder scheduler:", err)
+);
 
 // Health check route
 app.get("/health", (req, res) => {

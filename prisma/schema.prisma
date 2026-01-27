@@ -15,39 +15,40 @@ datasource db {
 }
 
 model User {
-  id            String         @id @default(cuid())
-  email         String         @unique
-  password      String?
-  googleId      String?        @unique
-  appleId       String?        @unique
-  name          String
-  avatar        String?
-  isVerified    Boolean        @default(false)
-  refreshToken  String?
-  resetPasswordToken String?
+  id                   String               @id @default(cuid())
+  email                String               @unique
+  password             String?
+  googleId             String?              @unique
+  appleId              String?              @unique
+  name                 String
+  avatar               String?
+  isVerified           Boolean              @default(false)
+  refreshToken         String?
+  resetPasswordToken   String?
   resetPasswordExpires DateTime?
-  searchHistory Json[]         @default([])
-  preferences   Json           @default("{\"theme\":\"auto\",\"language\":\"en\"}")
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  conversations       Conversation[]
+  searchHistory        Json[]               @default([])
+  preferences          Json                 @default("{\"theme\":\"auto\",\"language\":\"en\"}")
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  conversations        Conversation[]
   spaces               Space[]
   sharedConversations  SharedConversation[]
+  reminders            Reminder[]
 
   @@map("users")
 }
 
 model Conversation {
-  id        String    @id @default(cuid())
-  userId    String
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title     String    @default("New Chat")
+  id                  String               @id @default(cuid())
+  userId              String
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title               String               @default("New Chat")
   messages            Message[]
   sharedConversations SharedConversation[]
   spaceId             String?
-  space     Space?    @relation(fields: [spaceId], references: [id], onDelete: SetNull)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  space               Space?               @relation(fields: [spaceId], references: [id], onDelete: SetNull)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
 
   @@index([userId])
   @@index([spaceId])
@@ -96,4 +97,27 @@ model SharedConversation {
   @@index([shareId])
   @@index([conversationId])
   @@map("shared_conversations")
+}
+
+/// Reminder: Stores scheduled reminders for users
+model Reminder {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String // User-friendly title like "Daily Stock Updates"
+  prompt    String    @db.Text // The original prompt like "give updates on the stock market daily at 5PM"
+  aiPrompt  String    @db.Text // The actual prompt to send to AI
+  schedule  String // Cron expression (e.g., "0 17 * * *" for daily at 5PM)
+  timezone  String    @default("UTC") // User's timezone
+  isActive  Boolean   @default(true)
+  lastRun   DateTime?
+  nextRun   DateTime?
+  metadata  Json?     @default("{}") // Additional data like conversation settings
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([isActive])
+  @@index([nextRun])
+  @@map("reminders")
 }
