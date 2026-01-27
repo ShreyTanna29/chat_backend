@@ -958,6 +958,7 @@ You have access to web search for current information and image generation if ne
 
     let toolCalls = [];
     let generatedImages = [];
+    let citations = []; // Track web search citations/sources
     let streamEndedWithToolCalls = false;
     let finishReason = null;
     let firstChunkReceived = false;
@@ -996,8 +997,64 @@ You have access to web search for current information and image generation if ne
         // Responses API text delta
         delta = { content: chunk.delta };
       } else if (chunk.type === "response.completed") {
-        // Responses API completion - also check for images in output
+        // Responses API completion - also check for images and citations in output
         reason = "stop";
+
+        // Extract citations from web search results
+        if (chunk.response?.output) {
+          console.log(
+            "[STREAM] Checking response.completed for citations and images..."
+          );
+
+          // Look for citations in message content annotations
+          for (const outputItem of chunk.response.output) {
+            if (outputItem.type === "message" && outputItem.content) {
+              for (const contentItem of outputItem.content) {
+                if (
+                  contentItem.annotations &&
+                  Array.isArray(contentItem.annotations)
+                ) {
+                  for (const annotation of contentItem.annotations) {
+                    if (annotation.type === "url_citation") {
+                      // Avoid duplicate citations (same URL)
+                      const existingCitation = citations.find(
+                        (c) => c.url === annotation.url
+                      );
+                      if (!existingCitation) {
+                        citations.push({
+                          type: "url_citation",
+                          url: annotation.url,
+                          title: annotation.title || null,
+                          start_index: annotation.start_index,
+                          end_index: annotation.end_index,
+                        });
+                        console.log(
+                          "[STREAM] ✓ Citation found:",
+                          annotation.title || annotation.url
+                        );
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          if (citations.length > 0) {
+            console.log(
+              `[STREAM] ✓ Total citations extracted: ${citations.length}`
+            );
+            // Send citations event to client
+            res.write(
+              `data: ${JSON.stringify({
+                type: "citations",
+                citations: citations,
+                timestamp: new Date().toISOString(),
+              })}\n\n`
+            );
+            if (typeof res.flush === "function") res.flush();
+          }
+        }
 
         // Check if the completed response contains any images we might have missed
         if (chunk.response?.output) {
@@ -1593,11 +1650,15 @@ You have access to web search for current information and image generation if ne
 
     // Send done event
     console.log(`[STREAM] ✓ Stream completed. Length: ${fullResponse.length}`);
+    console.log(
+      `[STREAM] Citations: ${citations.length}, Images: ${generatedImages.length}`
+    );
     res.write(
       `data: ${JSON.stringify({
         type: "done",
         finish_reason: finishReason,
         full_response: fullResponse,
+        citations: citations.length > 0 ? citations : undefined,
         generated_images:
           generatedImages.length > 0 ? generatedImages : undefined,
         timestamp: new Date().toISOString(),
