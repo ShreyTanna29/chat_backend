@@ -1288,126 +1288,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     );
     if (typeof res.flush === "function") res.flush();
 
-    // Save messages to database
-    console.log("[STREAM] Saving messages to database...");
-    try {
-      // Upload files to Cloudinary if present
-      let imageUrl = null;
-      let imagePublicId = null;
-      if (imageFile) {
-        console.log("[STREAM] Uploading image to Cloudinary...");
-        try {
-          const result = await uploadToCloudinary(
-            imageFile.buffer,
-            "perplex/images",
-            "image"
-          );
-          imageUrl = result.secure_url;
-          imagePublicId = result.public_id;
-          console.log("[STREAM] ✓ Image uploaded:", imageUrl);
-        } catch (uploadError) {
-          console.error(
-            "[STREAM] ❌ Image upload failed:",
-            uploadError.message
-          );
-        }
-      }
-
-      let documentUrl = null;
-      let documentPublicId = null;
-      if (documentFile) {
-        console.log("[STREAM] Uploading document to Cloudinary...");
-        try {
-          const result = await uploadToCloudinary(
-            documentFile.buffer,
-            "perplex/documents",
-            "auto"
-          );
-          documentUrl = result.secure_url;
-          documentPublicId = result.public_id;
-          console.log("[STREAM] ✓ Document uploaded:", documentUrl);
-        } catch (uploadError) {
-          console.error(
-            "[STREAM] ❌ Document upload failed:",
-            uploadError.message
-          );
-        }
-      }
-
-      // Save user message
-      console.log("[STREAM] Saving user message...");
-      await Conversation.addMessage(conversation.id, {
-        role: "user",
-        content: userMessageContent,
-        metadata: {
-          hasImage: !!imageFile,
-          imageType: imageFile?.mimetype,
-          imageUrl,
-          imagePublicId,
-          hasDocument: !!documentFile,
-          documentName: documentMetadata?.filename,
-          documentType: documentMetadata?.mimetype,
-          documentSize: documentMetadata?.originalSize,
-          documentUrl,
-          documentPublicId,
-        },
-      });
-      console.log("[STREAM] ✓ User message saved");
-
-      // Save assistant response
-      console.log("[STREAM] Saving assistant response...");
-      await Conversation.addMessage(conversation.id, {
-        role: "assistant",
-        content: fullResponse,
-        metadata: {
-          model,
-          responseLength: fullResponse.length,
-          generatedImages:
-            generatedImages.length > 0
-              ? generatedImages.map((img) => ({
-                  url: img.url || undefined,
-                  publicId: img.publicId || undefined,
-                  revised_prompt: img.revised_prompt,
-                }))
-              : undefined,
-        },
-      });
-      console.log("[STREAM] ✓ Assistant response saved");
-
-      // Auto-generate title if this is the first message
-      if (!conversationId) {
-        console.log("[STREAM] Auto-generating conversation title...");
-        await Conversation.autoGenerateTitle(conversation.id);
-        console.log("[STREAM] ✓ Conversation title generated");
-      }
-      console.log("[STREAM] ✓ All database operations completed successfully");
-    } catch (dbError) {
-      console.error("[STREAM] ❌ Error saving to database:", dbError);
-      console.error("[STREAM] Database error details:", {
-        message: dbError.message,
-        stack: dbError.stack,
-      });
-      // Don't fail the request if DB save fails
-    }
-
-    // Save to user's search history
-    try {
-      console.log("[STREAM] Saving to user search history...");
-      const historyEntry =
-        prompt ||
-        (documentFile
-          ? `[document: ${documentMetadata?.filename || "uploaded"}]`
-          : "[image]");
-      await User.addToSearchHistory(req.user.id, historyEntry);
-      console.log("[STREAM] ✓ Search history updated");
-    } catch (historyError) {
-      console.error(
-        "[STREAM] ⚠️ Failed to save search history:",
-        historyError.message
-      );
-    }
-
-    // Clean up stream from active streams
+    // Clean up stream from active streams and close connection immediately
     cleanupStream();
     const totalDuration = Date.now() - requestStartTime;
     console.log("[STREAM] Closing stream connection");
@@ -1421,6 +1302,129 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     if (typeof res.flush === "function") res.flush();
     res.end();
     console.log("========== [STREAM] Request Completed ==========\n");
+
+    // Save messages to database asynchronously (fire-and-forget)
+    // This runs after the response is sent to the client
+    (async () => {
+      console.log("[STREAM-BG] Saving messages to database...");
+      try {
+        // Upload files to Cloudinary if present
+        let imageUrl = null;
+        let imagePublicId = null;
+        if (imageFile) {
+          console.log("[STREAM-BG] Uploading image to Cloudinary...");
+          try {
+            const result = await uploadToCloudinary(
+              imageFile.buffer,
+              "perplex/images",
+              "image"
+            );
+            imageUrl = result.secure_url;
+            imagePublicId = result.public_id;
+            console.log("[STREAM-BG] ✓ Image uploaded:", imageUrl);
+          } catch (uploadError) {
+            console.error(
+              "[STREAM-BG] ❌ Image upload failed:",
+              uploadError.message
+            );
+          }
+        }
+
+        let documentUrl = null;
+        let documentPublicId = null;
+        if (documentFile) {
+          console.log("[STREAM-BG] Uploading document to Cloudinary...");
+          try {
+            const result = await uploadToCloudinary(
+              documentFile.buffer,
+              "perplex/documents",
+              "auto"
+            );
+            documentUrl = result.secure_url;
+            documentPublicId = result.public_id;
+            console.log("[STREAM-BG] ✓ Document uploaded:", documentUrl);
+          } catch (uploadError) {
+            console.error(
+              "[STREAM-BG] ❌ Document upload failed:",
+              uploadError.message
+            );
+          }
+        }
+
+        // Save user message
+        console.log("[STREAM-BG] Saving user message...");
+        await Conversation.addMessage(conversation.id, {
+          role: "user",
+          content: userMessageContent,
+          metadata: {
+            hasImage: !!imageFile,
+            imageType: imageFile?.mimetype,
+            imageUrl,
+            imagePublicId,
+            hasDocument: !!documentFile,
+            documentName: documentMetadata?.filename,
+            documentType: documentMetadata?.mimetype,
+            documentSize: documentMetadata?.originalSize,
+            documentUrl,
+            documentPublicId,
+          },
+        });
+        console.log("[STREAM-BG] ✓ User message saved");
+
+        // Save assistant response
+        console.log("[STREAM-BG] Saving assistant response...");
+        await Conversation.addMessage(conversation.id, {
+          role: "assistant",
+          content: fullResponse,
+          metadata: {
+            model,
+            responseLength: fullResponse.length,
+            generatedImages:
+              generatedImages.length > 0
+                ? generatedImages.map((img) => ({
+                    url: img.url || undefined,
+                    publicId: img.publicId || undefined,
+                    revised_prompt: img.revised_prompt,
+                  }))
+                : undefined,
+          },
+        });
+        console.log("[STREAM-BG] ✓ Assistant response saved");
+
+        // Auto-generate title if this is the first message
+        if (!conversationId) {
+          console.log("[STREAM-BG] Auto-generating conversation title...");
+          await Conversation.autoGenerateTitle(conversation.id);
+          console.log("[STREAM-BG] ✓ Conversation title generated");
+        }
+        console.log(
+          "[STREAM-BG] ✓ All database operations completed successfully"
+        );
+      } catch (dbError) {
+        console.error("[STREAM-BG] ❌ Error saving to database:", dbError);
+        console.error("[STREAM-BG] Database error details:", {
+          message: dbError.message,
+          stack: dbError.stack,
+        });
+      }
+
+      // Save to user's search history
+      try {
+        console.log("[STREAM-BG] Saving to user search history...");
+        const historyEntry =
+          prompt ||
+          (documentFile
+            ? `[document: ${documentMetadata?.filename || "uploaded"}]`
+            : "[image]");
+        await User.addToSearchHistory(req.user.id, historyEntry);
+        console.log("[STREAM-BG] ✓ Search history updated");
+      } catch (historyError) {
+        console.error(
+          "[STREAM-BG] ⚠️ Failed to save search history:",
+          historyError.message
+        );
+      }
+    })();
   } catch (error) {
     const totalDuration = Date.now() - requestStartTime;
     console.error("[STREAM] ❌ Unexpected Error:", {
