@@ -9,21 +9,17 @@ class Conversation {
   static async create(data) {
     const { userId, title = "New Chat", spaceId } = data;
 
-    return await prisma.conversation.create({
+    // Don't include messages on create - it's always empty anyway
+    const conversation = await prisma.conversation.create({
       data: {
         userId,
         title,
-        // include optional spaceId if provided
         ...(spaceId ? { spaceId } : {}),
       },
-      include: {
-        messages: {
-          orderBy: {
-            createdAt: "asc",
-          },
-        },
-      },
     });
+
+    // Return with empty messages array for consistency
+    return { ...conversation, messages: [] };
   }
 
   /**
@@ -33,27 +29,36 @@ class Conversation {
    * @returns {Promise<Object|null>} Conversation or null
    */
   static async findById(id, options = {}) {
-    const { includeMessages = true } = options;
+    const { includeMessages = true, messageLimit = 50 } = options;
 
-    return await prisma.conversation.findUnique({
-      where: { id },
-      include: {
-        messages: includeMessages
-          ? {
-              orderBy: {
-                createdAt: "asc",
-              },
-            }
-          : false,
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
+    return await prisma.conversation
+      .findUnique({
+        where: { id },
+        include: {
+          messages: includeMessages
+            ? {
+                orderBy: {
+                  createdAt: "desc", // Get newest first
+                },
+                take: messageLimit, // Limit messages for performance
+              }
+            : false,
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
           },
         },
-      },
-    });
+      })
+      .then((conv) => {
+        // Reverse messages back to chronological order after limiting
+        if (conv && conv.messages) {
+          conv.messages = conv.messages.reverse();
+        }
+        return conv;
+      });
   }
 
   /**

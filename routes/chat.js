@@ -68,43 +68,36 @@ function needsWebSearch(prompt) {
   if (!prompt) return false;
   const lowerPrompt = prompt.toLowerCase();
 
-  // Keywords that indicate web search is needed
+  // Keywords that STRONGLY indicate web search is needed
+  // Be more conservative to avoid unnecessary tool overhead
   const searchKeywords = [
-    "search",
-    "look up",
-    "lookup",
-    "find out",
-    "google",
-    "weather",
-    "today",
-    "current",
-    "latest",
-    "recent",
-    "news",
-    "price",
-    "stock",
-    "market",
-    "live",
-    "now",
+    "search the web",
+    "search online",
+    "search internet",
+    "search for",
+    "look up online",
+    "google it",
+    "google this",
+    "weather today",
+    "weather tomorrow",
+    "weather forecast",
+    "current news",
+    "latest news",
+    "recent news",
+    "breaking news",
+    "today's news",
+    "stock price",
+    "current price",
+    "live score",
+    "match score",
+    "game score",
+    "what's happening",
+    "trending now",
     "real-time",
     "realtime",
-    "what is the",
-    "who is",
-    "where is",
-    "when is",
-    "how much",
-    "score",
-    "result",
-    "update",
-    "happening",
-    "trending",
-    "internet",
-    "online",
-    "web",
-    "browse",
-    "2024",
-    "2025",
-    "2026", // Recent years indicate need for current info
+    "live update",
+    "browse the web",
+    "search the internet",
   ];
 
   return searchKeywords.some((keyword) => lowerPrompt.includes(keyword));
@@ -269,6 +262,7 @@ const chatValidation = [
 // @access  Private
 router.post("/stream", auth, uploadFields, async (req, res) => {
   const requestStartTime = Date.now();
+  const timings = {}; // Track timing for each step
   console.log("\n========== [STREAM] New Request Started ==========");
   console.log("[STREAM] Timestamp:", new Date().toISOString());
   console.log("[STREAM] User ID:", req.user?.id);
@@ -382,38 +376,13 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       }
     }
 
-    // Get or create conversation
-    console.log("[STREAM] Getting/creating conversation...");
-    let conversation;
-    if (conversationId) {
-      console.log("[STREAM] Loading existing conversation:", conversationId);
-      conversation = await Conversation.findById(conversationId, {
-        includeMessages: true,
-      });
-      if (!conversation || conversation.userId !== req.user.id) {
-        console.log(
-          "[STREAM] ❌ Conversation not found or access denied:",
-          conversationId
-        );
-        return res.status(404).json({
-          success: false,
-          message: "Conversation not found",
-        });
-      }
-      console.log(
-        "[STREAM] ✓ Conversation loaded. Message count:",
-        conversation.messages?.length || 0
-      );
-    } else {
-      console.log("[STREAM] Creating new conversation...");
-      // Create new conversation
-      conversation = await Conversation.create({
-        userId: req.user.id,
-        title: "New Chat",
-        spaceId: spaceId || undefined,
-      });
-      console.log("[STREAM] ✓ New conversation created. ID:", conversation.id);
-    }
+    timings.parseInput = Date.now() - requestStartTime;
+    console.log(`[STREAM] ⏱️ Input parsing took: ${timings.parseInput}ms`);
+
+    // ============================================
+    // OPTIMIZATION: Set up SSE connection FIRST before any DB operations
+    // This gives the client immediate feedback that the request is being processed
+    // ============================================
 
     // Prepare Server-Sent Events response upfront so the client gets an immediate connection
     console.log("[STREAM] Setting up SSE headers...");
@@ -422,47 +391,31 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     res.setHeader("Connection", "keep-alive");
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "Cache-Control");
-    // Important for Nginx/Proxies to avoid buffering SSE
     res.setHeader("X-Accel-Buffering", "no");
-    // Disable compression for SSE on some production setups
-    // Accumulate assistant output across the stream
-    let fullResponse = "";
-    console.log("[STREAM] ✓ SSE headers configured");
-
-    // Generate unique streamId and create AbortController for this stream
-    const streamId = nanoid();
-    const abortController = new AbortController();
-    let isAborted = false;
-
-    // Store stream info for potential abort
-    activeStreams.set(streamId, {
-      abortController,
-      conversationId: conversation.id,
-      userId: req.user.id,
-      getFullResponse: () => fullResponse,
-      startTime: Date.now(),
-      userMessageContent: null, // Will be set later
-      model: null, // Will be set later
-    });
-    console.log("[STREAM] ✓ Stream registered with ID:", streamId);
 
     try {
       res.setHeader("Content-Encoding", "identity");
     } catch (_) {}
     if (typeof res.flushHeaders === "function") res.flushHeaders();
 
-    // Send initial connection confirmation immediately with streamId
-    console.log("[STREAM] Sending 'connected' event to client");
+    // Generate unique streamId and create AbortController for this stream
+    const streamId = nanoid();
+    const abortController = new AbortController();
+    let isAborted = false;
+    let fullResponse = "";
+
+    // Send initial "connecting" event immediately (before DB operations)
     res.write(
       `data: ${JSON.stringify({
-        type: "connected",
-        message: "Stream started",
-        conversationId: conversation.id,
+        type: "connecting",
+        message: "Initializing...",
         streamId: streamId,
       })}\n\n`
     );
     if (typeof res.flush === "function") res.flush();
-    console.log("[STREAM] ✓ Connection established with client");
+    console.log(
+      "[STREAM] ✓ Sent 'connecting' event, starting DB operations..."
+    );
 
     // Heartbeat to keep proxies from closing idle connections
     const heartbeat = setInterval(() => {
@@ -471,7 +424,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         if (typeof res.flush === "function") res.flush();
       } catch (_) {}
     }, 15000);
-    // Some proxies emit 'aborted' instead of 'close'
+
     req.on("aborted", () => {
       try {
         clearInterval(heartbeat);
@@ -491,26 +444,122 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       } catch (_) {}
     });
 
-    // Helper function to clean up stream on stop/complete
     const cleanupStream = () => {
       activeStreams.delete(streamId);
       clearInterval(heartbeat);
     };
 
-    // Load space (if provided) and build system prompts
+    // ============================================
+    // Now perform DB operations (while client already has SSE connection)
+    // Limit message history to 20 for performance
+    // ============================================
+    const dbStartTime = Date.now();
+    console.log("[STREAM] Getting/creating conversation...");
+
+    let conversation;
     let space = null;
-    if (spaceId) {
-      console.log("[STREAM] Loading space:", spaceId);
-      space = await Space.findById(spaceId);
-      if (!space || space.userId !== req.user.id) {
-        console.log("[STREAM] ❌ Space not found or access denied:", spaceId);
-        return res
-          .status(403)
-          .json({ success: false, message: "Access denied to space" });
-      }
-      console.log("[STREAM] ✓ Space loaded:", space.name);
-      console.log("[STREAM] Space has default prompt:", !!space.defaultPrompt);
+
+    // Run conversation and space loading in parallel if both are needed
+    if (conversationId && spaceId) {
+      const [convResult, spaceResult] = await Promise.all([
+        Conversation.findById(conversationId, {
+          includeMessages: true,
+          messageLimit: 20,
+        }),
+        Space.findById(spaceId),
+      ]);
+      conversation = convResult;
+      space = spaceResult;
+    } else if (conversationId) {
+      conversation = await Conversation.findById(conversationId, {
+        includeMessages: true,
+        messageLimit: 20, // Only load last 20 messages for context
+      });
+    } else if (spaceId) {
+      // For new conversations, create conversation and load space in parallel
+      const [convResult, spaceResult] = await Promise.all([
+        Conversation.create({
+          userId: req.user.id,
+          title: "New Chat",
+          spaceId: spaceId,
+        }),
+        Space.findById(spaceId),
+      ]);
+      conversation = convResult;
+      space = spaceResult;
+    } else {
+      // New conversation without space - simple create
+      conversation = await Conversation.create({
+        userId: req.user.id,
+        title: "New Chat",
+      });
     }
+
+    // Validate conversation access
+    if (
+      conversationId &&
+      (!conversation || conversation.userId !== req.user.id)
+    ) {
+      console.log(
+        "[STREAM] ❌ Conversation not found or access denied:",
+        conversationId
+      );
+      cleanupStream();
+      res.write(
+        `data: ${JSON.stringify({
+          type: "error",
+          message: "Conversation not found",
+        })}\n\n`
+      );
+      res.end();
+      return;
+    }
+
+    // Validate space access
+    if (spaceId && (!space || space.userId !== req.user.id)) {
+      console.log("[STREAM] ❌ Space not found or access denied:", spaceId);
+      cleanupStream();
+      res.write(
+        `data: ${JSON.stringify({
+          type: "error",
+          message: "Access denied to space",
+        })}\n\n`
+      );
+      res.end();
+      return;
+    }
+
+    timings.database = Date.now() - dbStartTime;
+    console.log(`[STREAM] ⏱️ Database operations took: ${timings.database}ms`);
+    console.log(
+      "[STREAM] ✓ Conversation ID:",
+      conversation.id,
+      "Messages:",
+      conversation.messages?.length || 0
+    );
+
+    // Store stream info for potential abort
+    activeStreams.set(streamId, {
+      abortController,
+      conversationId: conversation.id,
+      userId: req.user.id,
+      getFullResponse: () => fullResponse,
+      startTime: Date.now(),
+      userMessageContent: null,
+      model: null,
+    });
+
+    // Send full "connected" event now that we have conversation ID
+    res.write(
+      `data: ${JSON.stringify({
+        type: "connected",
+        message: "Stream started",
+        conversationId: conversation.id,
+        streamId: streamId,
+      })}\n\n`
+    );
+    if (typeof res.flush === "function") res.flush();
+    console.log("[STREAM] ✓ Connection established with client");
 
     // Build messages array with conversation history
     console.log("[STREAM] Building messages array...");
@@ -578,20 +627,25 @@ QUICK MODE INSTRUCTIONS:
 6. Keep responses concise but complete - don't sacrifice accuracy for brevity.
 7. If analyzing an image or document, focus on the key relevant details.
 8. Format in markdown but keep it simple - avoid overly complex structures.
+9. Give short answers without over-explaining.
 
 Be efficient and helpful. Users in quick mode want answers fast.`,
       });
       console.log("[STREAM] Added QUICK MODE system prompt");
     }
 
-    // Add conversation history if exists
+    // Add conversation history if exists (limit to last 20 messages for context window efficiency)
     if (conversation.messages && conversation.messages.length > 0) {
+      // Take only the most recent messages to avoid token overflow and improve speed
+      const recentMessages = conversation.messages.slice(-20);
       console.log(
         "[STREAM] Adding conversation history:",
+        recentMessages.length,
+        "of",
         conversation.messages.length,
         "messages"
       );
-      conversation.messages.forEach((msg) => {
+      recentMessages.forEach((msg) => {
         messages.push({
           role: msg.role,
           content: msg.content,
@@ -751,12 +805,17 @@ Be efficient and helpful. Users in quick mode want answers fast.`,
       if (requiresWebSearch) responsesTools.push({ type: "web_search" });
       if (requiresImageGen) responsesTools.push({ type: "image_generation" });
 
+      const openaiStartTime = Date.now();
       stream = await openai.responses.create({
         model,
         input: inputString,
         ...(responsesTools.length > 0 && { tools: responsesTools }),
         stream: true,
       });
+      timings.openaiConnect = Date.now() - openaiStartTime;
+      console.log(
+        `[STREAM] ⏱️ OpenAI connection took: ${timings.openaiConnect}ms`
+      );
     } else {
       // Fallback to standard chat completions
       console.log(
@@ -766,18 +825,24 @@ Be efficient and helpful. Users in quick mode want answers fast.`,
 
       // Start streaming immediately - NO PREFLIGHT
       // Only include tools if any are needed
+      const openaiStartTime = Date.now();
       stream = await openai.chat.completions.create({
         model,
         messages,
         stream: true,
         ...(tools.length > 0 && { tools, tool_choice: toolChoice }),
       });
+      timings.openaiConnect = Date.now() - openaiStartTime;
+      console.log(
+        `[STREAM] ⏱️ OpenAI connection took: ${timings.openaiConnect}ms`
+      );
     }
 
     let toolCalls = [];
     let generatedImages = [];
     let streamEndedWithToolCalls = false;
     let finishReason = null;
+    let firstChunkReceived = false;
 
     // Helper to process stream chunks
     const processChunk = async (chunk) => {
@@ -1252,6 +1317,13 @@ Be efficient and helpful. Users in quick mode want answers fast.`,
     };
 
     for await (const chunk of stream) {
+      // Track time to first chunk
+      if (!firstChunkReceived) {
+        firstChunkReceived = true;
+        timings.firstChunk = Date.now() - requestStartTime;
+        console.log(`[STREAM] ⏱️ Time to first chunk: ${timings.firstChunk}ms`);
+      }
+
       // Check if stream was aborted
       if (isAborted || abortController.signal.aborted) {
         console.log(
@@ -1418,8 +1490,19 @@ Be efficient and helpful. Users in quick mode want answers fast.`,
     // Clean up stream from active streams and close connection immediately
     cleanupStream();
     const totalDuration = Date.now() - requestStartTime;
+
+    // Log timing summary
+    console.log("[STREAM] ⏱️ === TIMING SUMMARY ===");
+    console.log(`[STREAM] ⏱️ Input parsing: ${timings.parseInput || 0}ms`);
+    console.log(`[STREAM] ⏱️ Database ops: ${timings.database || 0}ms`);
+    console.log(`[STREAM] ⏱️ OpenAI connect: ${timings.openaiConnect || 0}ms`);
+    console.log(
+      `[STREAM] ⏱️ Time to first chunk: ${timings.firstChunk || 0}ms`
+    );
+    console.log(`[STREAM] ⏱️ Total duration: ${totalDuration}ms`);
+    console.log("[STREAM] ⏱️ ======================");
+
     console.log("[STREAM] Closing stream connection");
-    console.log("[STREAM] Total request duration:", totalDuration, "ms");
     console.log(
       "[STREAM] Final response length:",
       fullResponse.length,
