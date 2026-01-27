@@ -445,7 +445,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     } else if (thinkMode) {
       model = "gpt-5.2-2025-12-11"; // Good reasoning capabilities
     } else {
-      model = "gpt-5-mini-2025-08-07"; // Fastest for quick responses
+      model = "gpt-5-nano-2025-08-07"; // Fastest for quick responses
     }
     console.log("[STREAM] Model selected:", model);
     if (researchMode) {
