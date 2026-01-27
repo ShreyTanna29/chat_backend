@@ -958,10 +958,17 @@ You have access to web search for current information and image generation if ne
 
     let toolCalls = [];
     let generatedImages = [];
+    let processedImageHashes = new Set(); // Track processed images to prevent duplicates
     let citations = []; // Track web search citations/sources
     let streamEndedWithToolCalls = false;
     let finishReason = null;
     let firstChunkReceived = false;
+
+    // Helper to generate a hash for image deduplication (using first 100 chars of base64)
+    const getImageHash = (base64Data) => {
+      if (!base64Data || typeof base64Data !== "string") return null;
+      return base64Data.substring(0, 100);
+    };
 
     // Helper to process stream chunks
     const processChunk = async (chunk) => {
@@ -1099,12 +1106,14 @@ You have access to web search for current information and image generation if ne
                 outputItem.prompt ||
                 "";
 
-              // Check if we already sent this image
-              const alreadySent = generatedImages.some(
-                (img) => img.b64_json === imageData || img.url === imageData
-              );
+              // Check if we already sent this image using hash
+              const imageHash = getImageHash(imageData);
+              const alreadySent =
+                imageHash && processedImageHashes.has(imageHash);
 
               if (imageData && typeof imageData === "string" && !alreadySent) {
+                // Mark as processed before uploading
+                if (imageHash) processedImageHashes.add(imageHash);
                 // Upload to Cloudinary
                 const uploadResult = await uploadBase64ToCloudinary(
                   imageData,
@@ -1185,21 +1194,24 @@ You have access to web search for current information and image generation if ne
 
           // Check for URL-based response
           if (!imageData && imageResult.url) {
-            generatedImages.push({
-              url: imageResult.url,
-              revised_prompt: revisedPrompt,
-            });
-
-            res.write(
-              `data: ${JSON.stringify({
-                type: "image",
+            // Check if URL already processed
+            if (!generatedImages.some((img) => img.url === imageResult.url)) {
+              generatedImages.push({
                 url: imageResult.url,
                 revised_prompt: revisedPrompt,
-                timestamp: new Date().toISOString(),
-              })}\n\n`
-            );
-            if (typeof res.flush === "function") res.flush();
-            console.log("[STREAM] ✓ Image URL event sent to client");
+              });
+
+              res.write(
+                `data: ${JSON.stringify({
+                  type: "image",
+                  url: imageResult.url,
+                  revised_prompt: revisedPrompt,
+                  timestamp: new Date().toISOString(),
+                })}\n\n`
+              );
+              if (typeof res.flush === "function") res.flush();
+              console.log("[STREAM] ✓ Image URL event sent to client");
+            }
           }
         }
 
@@ -1223,25 +1235,30 @@ You have access to web search for current information and image generation if ne
               const imgData = output.b64_json || output.image || output.data;
               const imgPrompt = output.revised_prompt || revisedPrompt;
               if (imgData) {
-                // Upload to Cloudinary
-                const uploadResult = await uploadBase64ToCloudinary(
-                  imgData,
-                  imgPrompt
-                );
-                generatedImages.push({
-                  url: uploadResult.url,
-                  publicId: uploadResult.publicId,
-                  revised_prompt: imgPrompt,
-                });
-                res.write(
-                  `data: ${JSON.stringify({
-                    type: "image",
+                // Check for duplicate before processing
+                const imgHash = getImageHash(imgData);
+                if (imgHash && !processedImageHashes.has(imgHash)) {
+                  processedImageHashes.add(imgHash);
+                  // Upload to Cloudinary
+                  const uploadResult = await uploadBase64ToCloudinary(
+                    imgData,
+                    imgPrompt
+                  );
+                  generatedImages.push({
                     url: uploadResult.url,
+                    publicId: uploadResult.publicId,
                     revised_prompt: imgPrompt,
-                    timestamp: new Date().toISOString(),
-                  })}\n\n`
-                );
-                if (typeof res.flush === "function") res.flush();
+                  });
+                  res.write(
+                    `data: ${JSON.stringify({
+                      type: "image",
+                      url: uploadResult.url,
+                      revised_prompt: imgPrompt,
+                      timestamp: new Date().toISOString(),
+                    })}\n\n`
+                  );
+                  if (typeof res.flush === "function") res.flush();
+                }
               }
             }
             console.log("[STREAM] ✓ Image events sent from output array");
@@ -1279,27 +1296,34 @@ You have access to web search for current information and image generation if ne
 
         // Send image event if we found base64 data
         if (imageData && typeof imageData === "string") {
-          // Upload to Cloudinary
-          const uploadResult = await uploadBase64ToCloudinary(
-            imageData,
-            revisedPrompt
-          );
-          generatedImages.push({
-            url: uploadResult.url,
-            publicId: uploadResult.publicId,
-            revised_prompt: revisedPrompt,
-          });
-
-          res.write(
-            `data: ${JSON.stringify({
-              type: "image",
+          // Check for duplicate before processing
+          const imageHash = getImageHash(imageData);
+          if (imageHash && !processedImageHashes.has(imageHash)) {
+            processedImageHashes.add(imageHash);
+            // Upload to Cloudinary
+            const uploadResult = await uploadBase64ToCloudinary(
+              imageData,
+              revisedPrompt
+            );
+            generatedImages.push({
               url: uploadResult.url,
+              publicId: uploadResult.publicId,
               revised_prompt: revisedPrompt,
-              timestamp: new Date().toISOString(),
-            })}\n\n`
-          );
-          if (typeof res.flush === "function") res.flush();
-          console.log("[STREAM] ✓ Image URL event sent to client");
+            });
+
+            res.write(
+              `data: ${JSON.stringify({
+                type: "image",
+                url: uploadResult.url,
+                revised_prompt: revisedPrompt,
+                timestamp: new Date().toISOString(),
+              })}\n\n`
+            );
+            if (typeof res.flush === "function") res.flush();
+            console.log("[STREAM] ✓ Image URL event sent to client");
+          } else {
+            console.log("[STREAM] ⚠ Skipping duplicate image (already sent)");
+          }
         } else {
           console.log(
             "[STREAM] ⚠ No image data found in image_generation_call item"
@@ -1348,51 +1372,61 @@ You have access to web search for current information and image generation if ne
           for (const content of item.content) {
             const imgData = content.b64_json || content.data || content.image;
             if (imgData && typeof imgData === "string") {
-              // Upload to Cloudinary
-              const uploadResult = await uploadBase64ToCloudinary(
-                imgData,
-                content.revised_prompt || revisedPrompt
-              );
-              generatedImages.push({
-                url: uploadResult.url,
-                publicId: uploadResult.publicId,
-                revised_prompt: content.revised_prompt || revisedPrompt,
-              });
-              res.write(
-                `data: ${JSON.stringify({
-                  type: "image",
+              // Check for duplicate before processing
+              const imgHash = getImageHash(imgData);
+              if (imgHash && !processedImageHashes.has(imgHash)) {
+                processedImageHashes.add(imgHash);
+                // Upload to Cloudinary
+                const uploadResult = await uploadBase64ToCloudinary(
+                  imgData,
+                  content.revised_prompt || revisedPrompt
+                );
+                generatedImages.push({
                   url: uploadResult.url,
+                  publicId: uploadResult.publicId,
                   revised_prompt: content.revised_prompt || revisedPrompt,
-                  timestamp: new Date().toISOString(),
-                })}\n\n`
-              );
-              if (typeof res.flush === "function") res.flush();
-              console.log("[STREAM] ✓ Image event sent from content array");
+                });
+                res.write(
+                  `data: ${JSON.stringify({
+                    type: "image",
+                    url: uploadResult.url,
+                    revised_prompt: content.revised_prompt || revisedPrompt,
+                    timestamp: new Date().toISOString(),
+                  })}\n\n`
+                );
+                if (typeof res.flush === "function") res.flush();
+                console.log("[STREAM] ✓ Image event sent from content array");
+              }
             }
           }
         }
 
         if (imageData && typeof imageData === "string") {
-          // Upload to Cloudinary
-          const uploadResult = await uploadBase64ToCloudinary(
-            imageData,
-            revisedPrompt
-          );
-          generatedImages.push({
-            url: uploadResult.url,
-            publicId: uploadResult.publicId,
-            revised_prompt: revisedPrompt,
-          });
-          res.write(
-            `data: ${JSON.stringify({
-              type: "image",
+          // Check for duplicate before processing
+          const imageHash = getImageHash(imageData);
+          if (imageHash && !processedImageHashes.has(imageHash)) {
+            processedImageHashes.add(imageHash);
+            // Upload to Cloudinary
+            const uploadResult = await uploadBase64ToCloudinary(
+              imageData,
+              revisedPrompt
+            );
+            generatedImages.push({
               url: uploadResult.url,
+              publicId: uploadResult.publicId,
               revised_prompt: revisedPrompt,
-              timestamp: new Date().toISOString(),
-            })}\n\n`
-          );
-          if (typeof res.flush === "function") res.flush();
-          console.log("[STREAM] ✓ Direct image event sent to client");
+            });
+            res.write(
+              `data: ${JSON.stringify({
+                type: "image",
+                url: uploadResult.url,
+                revised_prompt: revisedPrompt,
+                timestamp: new Date().toISOString(),
+              })}\n\n`
+            );
+            if (typeof res.flush === "function") res.flush();
+            console.log("[STREAM] ✓ Direct image event sent to client");
+          }
         }
       } else if (
         chunk.type === "response.output_item.done" &&
@@ -1411,26 +1445,33 @@ You have access to web search for current information and image generation if ne
           chunk.result?.revised_prompt || chunk.revised_prompt || "";
 
         if (imageData && typeof imageData === "string") {
-          // Upload to Cloudinary
-          const uploadResult = await uploadBase64ToCloudinary(
-            imageData,
-            revisedPrompt
-          );
-          generatedImages.push({
-            url: uploadResult.url,
-            publicId: uploadResult.publicId,
-            revised_prompt: revisedPrompt,
-          });
-          res.write(
-            `data: ${JSON.stringify({
-              type: "image",
+          // Check for duplicate before processing
+          const imageHash = getImageHash(imageData);
+          if (imageHash && !processedImageHashes.has(imageHash)) {
+            processedImageHashes.add(imageHash);
+            // Upload to Cloudinary
+            const uploadResult = await uploadBase64ToCloudinary(
+              imageData,
+              revisedPrompt
+            );
+            generatedImages.push({
               url: uploadResult.url,
+              publicId: uploadResult.publicId,
               revised_prompt: revisedPrompt,
-              timestamp: new Date().toISOString(),
-            })}\n\n`
-          );
-          if (typeof res.flush === "function") res.flush();
-          console.log("[STREAM] ✓ Image sent from image_generation.done event");
+            });
+            res.write(
+              `data: ${JSON.stringify({
+                type: "image",
+                url: uploadResult.url,
+                revised_prompt: revisedPrompt,
+                timestamp: new Date().toISOString(),
+              })}\n\n`
+            );
+            if (typeof res.flush === "function") res.flush();
+            console.log(
+              "[STREAM] ✓ Image sent from image_generation.done event"
+            );
+          }
         }
       } else if (chunk.type && chunk.type.startsWith("response.")) {
         // Log other responses API events for debugging
