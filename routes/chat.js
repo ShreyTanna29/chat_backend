@@ -683,40 +683,19 @@ You have access to web search for current information and image generation if ne
     );
 
     // Determine if we should use the new 'responses' API (if available) or standard chat completions
-    // The user requested to use the SDK's web search tool which is often associated with the 'responses' API
-    // IMPORTANT: Responses API doesn't support image inputs, so force chat completions when image is present
-    const useResponsesApi = !!openai.responses && !imageFile;
+    // The responses API supports both web_search and images (via attachments)
+    const useResponsesApi = !!openai.responses;
     console.log("[STREAM] Using 'responses' API:", useResponsesApi);
-    if (imageFile && openai.responses) {
+    if (imageFile) {
       console.log(
-        "[STREAM] Image detected - forcing chat completions API instead of responses API"
+        "[STREAM] Image detected - will include as attachment in API request"
       );
     }
 
     let stream;
 
     if (useResponsesApi) {
-      // Construct input string from messages for the responses API
-      // Assuming responses API takes a single 'input' string
-      let inputString = "";
-      if (messages.length > 0) {
-        // Add system prompt if present
-        const systemMsg = messages.find((m) => m.role === "system");
-        if (systemMsg) inputString += `System: ${systemMsg.content}\n\n`;
-
-        // Add conversation history (last 10 messages to keep it concise)
-        const history = messages.filter((m) => m.role !== "system").slice(-10);
-        history.forEach((msg) => {
-          inputString += `${msg.role === "user" ? "User" : "Assistant"}: ${
-            msg.content
-          }\n`;
-        });
-      }
-      // Ensure the prompt is at the end if not already added
-      if (!inputString.endsWith(userMessageContent)) {
-        inputString += `User: ${userMessageContent}`;
-      }
-
+      // Responses API supports structured messages similar to chat completions
       console.log("[STREAM] Starting stream with responses API. Model:", model);
 
       // Always provide both tools for responses API
@@ -726,12 +705,14 @@ You have access to web search for current information and image generation if ne
       ];
 
       const openaiStartTime = Date.now();
-      stream = await openai.responses.create({
+      const responsesParams = {
         model,
-        input: inputString,
+        messages, // Pass the full messages array with images
         tools: responsesTools,
         stream: true,
-      });
+      };
+
+      stream = await openai.responses.create(responsesParams);
       timings.openaiConnect = Date.now() - openaiStartTime;
       console.log(
         `[STREAM] ⏱️ OpenAI connection took: ${timings.openaiConnect}ms`
@@ -743,18 +724,31 @@ You have access to web search for current information and image generation if ne
         model
       );
 
+      // Chat completions API only supports 'function' type tools, not 'web_search'
+      // Filter out web_search tool
+      const chatTools = tools.filter((t) => t.type !== "web_search");
+      console.log(
+        "[STREAM] Chat completions tools:",
+        chatTools.map((t) => t.type || t.function?.name)
+      );
+
       // Start streaming immediately - NO PREFLIGHT
-      // Always include tools for all modes
       const openaiStartTime = Date.now();
-      stream = await openai.chat.completions.create({
+      const chatParams = {
         model,
         messages,
         stream: true,
         // Optimize streaming for faster first token
         stream_options: { include_usage: false },
-        tools,
-        tool_choice: toolChoice,
-      });
+      };
+
+      // Only add tools if we have any (after filtering)
+      if (chatTools.length > 0) {
+        chatParams.tools = chatTools;
+        chatParams.tool_choice = toolChoice;
+      }
+
+      stream = await openai.chat.completions.create(chatParams);
       timings.openaiConnect = Date.now() - openaiStartTime;
       console.log(
         `[STREAM] ⏱️ OpenAI connection took: ${timings.openaiConnect}ms`
