@@ -684,8 +684,14 @@ You have access to web search for current information and image generation if ne
 
     // Determine if we should use the new 'responses' API (if available) or standard chat completions
     // The user requested to use the SDK's web search tool which is often associated with the 'responses' API
-    const useResponsesApi = !!openai.responses;
+    // IMPORTANT: Responses API doesn't support image inputs, so force chat completions when image is present
+    const useResponsesApi = !!openai.responses && !imageFile;
     console.log("[STREAM] Using 'responses' API:", useResponsesApi);
+    if (imageFile && openai.responses) {
+      console.log(
+        "[STREAM] Image detected - forcing chat completions API instead of responses API"
+      );
+    }
 
     let stream;
 
