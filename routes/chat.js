@@ -695,8 +695,54 @@ You have access to web search for current information and image generation if ne
     let stream;
 
     if (useResponsesApi) {
-      // Responses API supports structured messages similar to chat completions
+      // Responses API uses 'input' parameter with array of message objects
+      // Format: input: [{ role: "user", content: [{ type: "input_text", text: "..." }, { type: "input_image", image_url: "..." }] }]
       console.log("[STREAM] Starting stream with responses API. Model:", model);
+
+      // Convert messages array to responses API input format
+      const responsesInput = [];
+
+      for (const msg of messages) {
+        if (msg.role === "system") {
+          // System messages go as separate entries
+          responsesInput.push({
+            role: "system",
+            content: msg.content,
+          });
+        } else if (msg.role === "user" || msg.role === "assistant") {
+          // For user/assistant messages, convert content format
+          if (typeof msg.content === "string") {
+            // Simple text message
+            responsesInput.push({
+              role: msg.role,
+              content: msg.content,
+            });
+          } else if (Array.isArray(msg.content)) {
+            // Structured content (text + image)
+            const contentArray = msg.content.map((item) => {
+              if (item.type === "text") {
+                return { type: "input_text", text: item.text };
+              } else if (item.type === "image_url") {
+                return { type: "input_image", image_url: item.image_url.url };
+              }
+              return item;
+            });
+            responsesInput.push({
+              role: msg.role,
+              content: contentArray,
+            });
+          }
+        }
+      }
+
+      console.log(
+        "[STREAM] Converted",
+        messages.length,
+        "messages to responses API format"
+      );
+      if (imageFile) {
+        console.log("[STREAM] Image included in input with type: input_image");
+      }
 
       // Always provide both tools for responses API
       const responsesTools = [
@@ -707,7 +753,7 @@ You have access to web search for current information and image generation if ne
       const openaiStartTime = Date.now();
       const responsesParams = {
         model,
-        messages, // Pass the full messages array with images
+        input: responsesInput, // Use 'input' not 'messages'
         tools: responsesTools,
         stream: true,
       };
