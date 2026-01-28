@@ -76,198 +76,6 @@ function toAIErrorResponse(err, fallbackMessage = "AI service error") {
 // Perform web search via Tavily if configured; otherwise return a helpful message
 // Web search is now handled natively by the model
 
-// Helper: Detect if the prompt requires web search (used for Quick Mode only)
-// Think Mode and Research Mode always have web search enabled
-function needsWebSearch(prompt) {
-  if (!prompt) return false;
-  const lowerPrompt = prompt.toLowerCase();
-
-  // Keywords that indicate web search is needed for Quick Mode
-  const searchKeywords = [
-    // Explicit search requests
-    "search",
-    "look up",
-    "lookup",
-    "google",
-    "find out",
-    "find me",
-    "browse",
-    "check online",
-    "search the web",
-    "search web",
-    "search online",
-
-    // Weather queries
-    "weather",
-    "temperature",
-    "forecast",
-    "humidity",
-    "rain today",
-    "will it rain",
-    "is it cold",
-    "is it hot",
-
-    // News and current events
-    "news",
-    "headlines",
-    "breaking",
-    "latest",
-    "recent",
-    "what happened",
-    "what's happening",
-    "trending",
-
-    // Financial/market data
-    "stock",
-    "share price",
-    "market",
-    "crypto",
-    "bitcoin",
-    "ethereum",
-    "exchange rate",
-    "currency",
-    "forex",
-    "nifty",
-    "sensex",
-
-    // Sports scores and results
-    "score",
-    "match result",
-    "who won",
-    "game result",
-    "standings",
-    "ipl",
-    "world cup",
-    "premier league",
-    "nba",
-    "nfl",
-
-    // Real-time information
-    "live",
-    "real-time",
-    "realtime",
-    "right now",
-    "currently",
-    "today",
-    "yesterday",
-    "this week",
-    "this month",
-
-    // Location-based queries
-    "near me",
-    "nearby",
-    "open now",
-    "hours of",
-    "location of",
-    "directions to",
-    "how to get to",
-    "address of",
-
-    // Product/price queries
-    "price of",
-    "cost of",
-    "how much is",
-    "buy",
-    "purchase",
-    "deals on",
-    "discount",
-    "sale on",
-    "cheapest",
-
-    // People and entities (current info)
-    "net worth",
-    "age of",
-    "birthday",
-    "who is the current",
-    "ceo of",
-    "founder of",
-    "president of",
-    "prime minister",
-
-    // Events and releases
-    "release date",
-    "when is",
-    "schedule",
-    "upcoming",
-    "event",
-    "concert",
-    "movie release",
-    "launch date",
-
-    // Tech and updates
-    "latest version",
-    "new update",
-    "changelog",
-    "patch notes",
-    "ios",
-    "android",
-    "windows",
-    "update",
-
-    // Year references (likely needs current info)
-    "2024",
-    "2025",
-    "2026",
-    "2027",
-  ];
-
-  return searchKeywords.some((keyword) => lowerPrompt.includes(keyword));
-}
-
-// Helper: Detect if the prompt requires image generation
-function needsImageGeneration(prompt) {
-  if (!prompt) return false;
-  const lowerPrompt = prompt.toLowerCase();
-
-  // Keywords that indicate image generation is needed
-  const imageKeywords = [
-    "create image",
-    "create an image",
-    "create a image",
-    "generate image",
-    "generate an image",
-    "generate a image",
-    "make image",
-    "make an image",
-    "make a image",
-    "draw",
-    "drawing",
-    "sketch",
-    "create picture",
-    "create a picture",
-    "generate picture",
-    "make picture",
-    "make a picture",
-    "create art",
-    "generate art",
-    "make art",
-    "create illustration",
-    "generate illustration",
-    "create visual",
-    "generate visual",
-    "design a",
-    "design an",
-    "paint",
-    "painting",
-    "render",
-    "rendering",
-    "create logo",
-    "generate logo",
-    "make logo",
-    "create icon",
-    "generate icon",
-    "visualize",
-    "visualization",
-    "image of",
-    "picture of",
-    "photo of",
-    "dall-e",
-    "dalle",
-  ];
-
-  return imageKeywords.some((keyword) => lowerPrompt.includes(keyword));
-}
-
 // Perform image generation via DALL-E
 async function performImageGeneration(
   prompt,
@@ -831,32 +639,11 @@ You have access to web search for current information and image generation if ne
     }
     console.log("[STREAM] Total messages in context:", messages.length);
 
-    // Determine which tools are needed based on the prompt and mode
-    const promptText = userMessageContent || prompt || "";
-    const requiresImageGen = needsImageGeneration(promptText);
-
-    // Web search logic:
-    // - Research Mode: ALWAYS enable web search (AI decides when to use)
-    // - Think Mode: ALWAYS enable web search (AI decides when to use)
-    // - Quick Mode: Only enable if keywords match (for speed)
-    const requiresWebSearch =
-      researchMode || thinkMode || needsWebSearch(promptText);
-
-    console.log("[STREAM] Tool detection:", {
-      requiresWebSearch,
-      requiresImageGen,
-      mode: researchMode ? "research" : thinkMode ? "think" : "quick",
-    });
-
-    // Build tools array conditionally - only include tools when needed
-    const tools = [];
-
-    if (requiresWebSearch) {
-      tools.push({ type: "web_search" });
-    }
-
-    if (requiresImageGen) {
-      tools.push({
+    // Always provide both web search and image generation tools for all modes
+    // Let the LLM decide when to use them based on the user's request
+    const tools = [
+      { type: "web_search" },
+      {
         type: "function",
         function: {
           name: "generate_image",
@@ -886,14 +673,13 @@ You have access to web search for current information and image generation if ne
             required: ["prompt"],
           },
         },
-      });
-    }
+      },
+    ];
 
-    // Only set tool choice if we have tools
-    const toolChoice = tools.length > 0 ? "auto" : undefined;
+    const toolChoice = "auto";
     console.log(
-      "[STREAM] Tools enabled:",
-      tools.length > 0 ? tools.map((t) => t.type || t.function?.name) : "none"
+      "[STREAM] Tools enabled for all modes:",
+      tools.map((t) => t.type || t.function?.name)
     );
 
     // Determine if we should use the new 'responses' API (if available) or standard chat completions
@@ -927,16 +713,17 @@ You have access to web search for current information and image generation if ne
 
       console.log("[STREAM] Starting stream with responses API. Model:", model);
 
-      // Build tools for responses API conditionally
-      const responsesTools = [];
-      if (requiresWebSearch) responsesTools.push({ type: "web_search" });
-      if (requiresImageGen) responsesTools.push({ type: "image_generation" });
+      // Always provide both tools for responses API
+      const responsesTools = [
+        { type: "web_search" },
+        { type: "image_generation" },
+      ];
 
       const openaiStartTime = Date.now();
       stream = await openai.responses.create({
         model,
         input: inputString,
-        ...(responsesTools.length > 0 && { tools: responsesTools }),
+        tools: responsesTools,
         stream: true,
       });
       timings.openaiConnect = Date.now() - openaiStartTime;
@@ -951,7 +738,7 @@ You have access to web search for current information and image generation if ne
       );
 
       // Start streaming immediately - NO PREFLIGHT
-      // Only include tools if any are needed
+      // Always include tools for all modes
       const openaiStartTime = Date.now();
       stream = await openai.chat.completions.create({
         model,
@@ -959,7 +746,8 @@ You have access to web search for current information and image generation if ne
         stream: true,
         // Optimize streaming for faster first token
         stream_options: { include_usage: false },
-        ...(tools.length > 0 && { tools, tool_choice: toolChoice }),
+        tools,
+        tool_choice: toolChoice,
       });
       timings.openaiConnect = Date.now() - openaiStartTime;
       console.log(
