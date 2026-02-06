@@ -840,6 +840,7 @@ You can use web_search for current info, generate_image for visuals, and create_
       const responsesTools = [
         { type: "web_search" },
         { type: "image_generation" },
+        { type: "reminder_creation" },
       ];
 
       const openaiStartTime = Date.now();
@@ -864,7 +865,9 @@ You can use web_search for current info, generate_image for visuals, and create_
 
       // Chat completions API only supports 'function' type tools, not 'web_search'
       // Filter out web_search tool
-      const chatTools = tools.filter((t) => t.type !== "web_search");
+      const chatTools = tools.filter(
+        (t) => t.type !== "web_search" && t.type !== "reminder_creation",
+      );
       console.log(
         "[STREAM] Chat completions tools:",
         chatTools.map((t) => t.type || t.function?.name),
