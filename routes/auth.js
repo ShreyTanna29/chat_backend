@@ -2,6 +2,7 @@ const express = require("express");
 const { validationResult } = require("express-validator");
 const multer = require("multer");
 const User = require("../models/User");
+const Session = require("../models/Session");
 const auth = require("../middleware/auth");
 const {
   generateAccessToken,
@@ -41,6 +42,36 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID_WEB);
 
 const router = express.Router();
 
+// Helper function to extract device info from request
+const getDeviceInfo = (req) => {
+  const userAgent = req.get("user-agent") || "Unknown";
+  // Simple device detection - can be enhanced with a library like 'ua-parser-js'
+  if (userAgent.includes("Mobile")) return "Mobile Device";
+  if (userAgent.includes("Tablet")) return "Tablet";
+  return "Desktop Browser";
+};
+
+// Helper function to create a session
+const createSession = async (userId, req) => {
+  const refreshToken = generateRefreshToken(userId);
+  const deviceInfo = getDeviceInfo(req);
+  const ipAddress = req.ip || req.connection.remoteAddress;
+
+  // Refresh tokens expire in 30 days
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + 30);
+
+  await Session.create({
+    userId,
+    refreshToken,
+    deviceInfo,
+    ipAddress,
+    expiresAt,
+  });
+
+  return refreshToken;
+};
+
 // @route   POST /api/auth/signup
 // @desc    Register a new user
 // @access  Public
@@ -74,12 +105,9 @@ router.post("/signup", signupValidation, async (req, res) => {
       name,
     });
 
-    // Generate tokens
+    // Generate tokens and create session
     const accessToken = generateAccessToken(user.id);
-    const refreshToken = generateRefreshToken(user.id);
-
-    // Save refresh token to user
-    await User.updateRefreshToken(user.id, refreshToken);
+    const refreshToken = await createSession(user.id, req);
 
     res.status(201).json({
       success: true,
@@ -134,12 +162,9 @@ router.post("/login", loginValidation, async (req, res) => {
       });
     }
 
-    // Generate tokens
+    // Generate tokens and create session
     const accessToken = generateAccessToken(user.id);
-    const refreshToken = generateRefreshToken(user.id);
-
-    // Save refresh token to user
-    await User.updateRefreshToken(user.id, refreshToken);
+    const refreshToken = await createSession(user.id, req);
 
     // Remove password from response
     delete user.password;
@@ -223,12 +248,9 @@ router.post("/google", googleAuthValidation, async (req, res) => {
       }
     }
 
-    // Generate tokens
+    // Generate tokens and create session
     const accessToken = generateAccessToken(user.id);
-    const refreshToken = generateRefreshToken(user.id);
-
-    // Save refresh token to user
-    await User.updateRefreshToken(user.id, refreshToken);
+    const refreshToken = await createSession(user.id, req);
 
     res.json({
       success: true,
@@ -301,12 +323,9 @@ router.post("/apple", appleAuthValidation, async (req, res) => {
       }
     }
 
-    // Generate tokens
+    // Generate tokens and create session
     const accessToken = generateAccessToken(user.id);
-    const refreshToken = generateRefreshToken(user.id);
-
-    // Save refresh token to user
-    await User.updateRefreshToken(user.id, refreshToken);
+    const refreshToken = await createSession(user.id, req);
 
     res.json({
       success: true,
@@ -377,12 +396,9 @@ router.post("/apple/callback", async (req, res) => {
       }
     }
 
-    // Generate tokens
+    // Generate tokens and create session
     const accessToken = generateAccessToken(user.id);
-    const refreshToken = generateRefreshToken(user.id);
-
-    // Save refresh token to user
-    await User.updateRefreshToken(user.id, refreshToken);
+    const refreshToken = await createSession(user.id, req);
 
     // Redirect to frontend with tokens
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -416,19 +432,20 @@ router.post("/refresh", refreshTokenValidation, async (req, res) => {
     // Verify refresh token
     const decoded = verifyRefreshToken(refreshToken);
 
-    // Find user and check if refresh token matches
-    const user = await User.findById(decoded.userId, {
-      excludePassword: false,
-    });
-    if (!user || user.refreshToken !== refreshToken) {
+    // Find session and validate
+    const session = await Session.findByRefreshToken(refreshToken);
+    if (!session || session.expiresAt < new Date()) {
       return res.status(401).json({
         success: false,
-        message: "Invalid refresh token",
+        message: "Invalid or expired refresh token",
       });
     }
 
+    // Update last active time
+    await Session.updateLastActive(session.id);
+
     // Generate new access token
-    const newAccessToken = generateAccessToken(user.id);
+    const newAccessToken = generateAccessToken(session.userId);
 
     res.json({
       success: true,
@@ -456,12 +473,16 @@ router.post("/refresh", refreshTokenValidation, async (req, res) => {
 });
 
 // @route   POST /api/auth/logout
-// @desc    Logout user
+// @desc    Logout user from current device
 // @access  Private
 router.post("/logout", auth, async (req, res) => {
   try {
-    // Clear refresh token
-    await User.updateRefreshToken(req.user.id, null);
+    const { refreshToken } = req.body;
+
+    if (refreshToken) {
+      // Delete specific session
+      await Session.deleteByRefreshToken(refreshToken);
+    }
 
     res.json({
       success: true,
@@ -469,6 +490,27 @@ router.post("/logout", auth, async (req, res) => {
     });
   } catch (error) {
     console.error("Logout error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
+
+// @route   POST /api/auth/logout-all
+// @desc    Logout user from all devices
+// @access  Private
+router.post("/logout-all", auth, async (req, res) => {
+  try {
+    // Delete all sessions for the user
+    await Session.deleteAllByUserId(req.user.id);
+
+    res.json({
+      success: true,
+      message: "Logged out from all devices successfully",
+    });
+  } catch (error) {
+    console.error("Logout all error:", error);
     res.status(500).json({
       success: false,
       message: "Internal server error",

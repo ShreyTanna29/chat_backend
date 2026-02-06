@@ -34,6 +34,7 @@ model User {
   spaces               Space[]
   sharedConversations  SharedConversation[]
   reminders            Reminder[]
+  sessions             Session[]
 
   @@map("users")
 }
@@ -120,4 +121,22 @@ model Reminder {
   @@index([isActive])
   @@index([nextRun])
   @@map("reminders")
+}
+
+/// Session: Stores active authentication sessions for multi-device support
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshToken String   @unique
+  deviceInfo   String? // E.g., "iPhone 14 Pro", "Chrome on Windows", etc.
+  ipAddress    String?
+  lastActive   DateTime @default(now())
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([refreshToken])
+  @@index([expiresAt])
+  @@map("sessions")
 }
