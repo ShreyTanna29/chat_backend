@@ -4,6 +4,7 @@ const auth = require("../middleware/auth");
 const User = require("../models/User");
 const Conversation = require("../models/Conversation");
 const Space = require("../models/Space");
+const Reminder = require("../models/Reminder");
 const { body, validationResult } = require("express-validator");
 const multer = require("multer");
 const { convertToPCM16 } = require("../utils/audioConverter");
@@ -13,6 +14,8 @@ const {
   SUPPORTED_DOCUMENT_TYPES,
 } = require("../utils/documentParser");
 const { uploadToCloudinary } = require("../utils/cloudinary");
+const { parseReminderPrompt } = require("../utils/reminderParser");
+const { scheduleReminder } = require("../utils/reminderScheduler");
 const { nanoid } = require("nanoid");
 const prisma = require("../config/database");
 
@@ -49,8 +52,8 @@ function toAIErrorResponse(err, fallbackMessage = "AI service error") {
     (err?.code === "insufficient_quota"
       ? 402
       : err?.code === "rate_limit_exceeded"
-      ? 429
-      : 502);
+        ? 429
+        : 502);
 
   const ai = err?.error || err?.response?.data?.error;
 
@@ -80,7 +83,7 @@ function toAIErrorResponse(err, fallbackMessage = "AI service error") {
 async function performImageGeneration(
   prompt,
   size = "1024x1024",
-  quality = "standard"
+  quality = "standard",
 ) {
   console.log("[IMAGE_GEN] Starting image generation for prompt:", prompt);
   try {
@@ -126,6 +129,59 @@ async function performImageGeneration(
   }
 }
 
+// Create a reminder for the user
+async function performCreateReminder(userId, prompt, timezone = "UTC") {
+  console.log("[REMINDER] Creating reminder for user:", userId);
+  console.log("[REMINDER] Prompt:", prompt);
+  console.log("[REMINDER] Timezone:", timezone);
+
+  try {
+    // Parse the natural language reminder
+    const parsed = await parseReminderPrompt(prompt, timezone);
+    console.log("[REMINDER] Parsed reminder:", {
+      title: parsed.title,
+      frequency: parsed.frequency,
+      schedule: parsed.schedule,
+    });
+
+    // Create the reminder in database
+    const reminder = await Reminder.create(userId, {
+      title: parsed.title,
+      prompt: prompt,
+      aiPrompt: parsed.aiPrompt,
+      schedule: parsed.schedule,
+      timezone: timezone,
+      metadata: {
+        frequency: parsed.frequency,
+      },
+    });
+
+    // Schedule the reminder
+    scheduleReminder(reminder);
+    console.log("[REMINDER] ✓ Reminder created and scheduled:", reminder.id);
+
+    return JSON.stringify({
+      success: true,
+      reminder: {
+        id: reminder.id,
+        title: reminder.title,
+        schedule: reminder.schedule,
+        frequency: parsed.frequency,
+        timezone: reminder.timezone,
+        isActive: reminder.isActive,
+      },
+    });
+  } catch (err) {
+    console.error("[REMINDER] ❌ Exception:", err.message);
+    return JSON.stringify({
+      success: false,
+      error: "Reminder creation failed",
+      message: err.message,
+      prompt,
+    });
+  }
+}
+
 // Helper function to upload base64 image to Cloudinary and return URL
 async function uploadBase64ToCloudinary(base64Data, revisedPrompt = "") {
   try {
@@ -134,7 +190,7 @@ async function uploadBase64ToCloudinary(base64Data, revisedPrompt = "") {
     const uploadResult = await uploadToCloudinary(
       imageBuffer,
       "perplex/generated-images",
-      "image"
+      "image",
     );
     console.log("[CLOUDINARY] ✓ Image uploaded:", uploadResult.secure_url);
     return {
@@ -204,7 +260,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       "  - Prompt preview:",
       prompt
         ? prompt.substring(0, 100) + (prompt.length > 100 ? "..." : "")
-        : "N/A"
+        : "N/A",
     );
     console.log("  - Has image:", !!imageFile);
     if (imageFile) {
@@ -231,14 +287,14 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     if (documentFile && !isSupportedDocument(documentFile.mimetype)) {
       console.log(
         "[STREAM] ❌ Unsupported document type:",
-        documentFile.mimetype
+        documentFile.mimetype,
       );
       return res.status(400).json({
         success: false,
         message: `Unsupported document type: ${
           documentFile.mimetype
         }. Supported types: ${Object.keys(SUPPORTED_DOCUMENT_TYPES).join(
-          ", "
+          ", ",
         )}`,
       });
     }
@@ -258,13 +314,13 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     console.log("[STREAM] Model selected:", model);
     if (researchMode) {
       console.log(
-        "[STREAM] Research mode active - will force comprehensive web search"
+        "[STREAM] Research mode active - will force comprehensive web search",
       );
     }
 
     if (!prompt && !imageFile && !documentFile) {
       console.log(
-        "[STREAM] ❌ Validation failed: No prompt, image, or document provided"
+        "[STREAM] ❌ Validation failed: No prompt, image, or document provided",
       );
       return res.status(400).json({
         success: false,
@@ -281,7 +337,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         const parsed = await parseDocument(
           documentFile.buffer,
           documentFile.mimetype,
-          documentFile.originalname
+          documentFile.originalname,
         );
         documentContent = parsed.text;
         documentMetadata = parsed.metadata;
@@ -292,7 +348,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       } catch (parseError) {
         console.error(
           "[STREAM] ❌ Document parsing failed:",
-          parseError.message
+          parseError.message,
         );
         return res.status(400).json({
           success: false,
@@ -335,11 +391,11 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         type: "connecting",
         message: "Initializing...",
         streamId: streamId,
-      })}\n\n`
+      })}\n\n`,
     );
     if (typeof res.flush === "function") res.flush();
     console.log(
-      "[STREAM] ✓ Sent 'connecting' event, starting DB operations..."
+      "[STREAM] ✓ Sent 'connecting' event, starting DB operations...",
     );
 
     // Heartbeat to keep proxies from closing idle connections
@@ -358,7 +414,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         activeStreams.delete(streamId);
         console.warn(
           "[STREAM] Request aborted by client, stream ID:",
-          streamId
+          streamId,
         );
       } catch (_) {}
     });
@@ -427,14 +483,14 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     ) {
       console.log(
         "[STREAM] ❌ Conversation not found or access denied:",
-        conversationId
+        conversationId,
       );
       cleanupStream();
       res.write(
         `data: ${JSON.stringify({
           type: "error",
           message: "Conversation not found",
-        })}\n\n`
+        })}\n\n`,
       );
       res.end();
       return;
@@ -448,7 +504,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         `data: ${JSON.stringify({
           type: "error",
           message: "Access denied to space",
-        })}\n\n`
+        })}\n\n`,
       );
       res.end();
       return;
@@ -460,7 +516,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       "[STREAM] ✓ Conversation ID:",
       conversation.id,
       "Messages:",
-      conversation.messages?.length || 0
+      conversation.messages?.length || 0,
     );
 
     // Store stream info for potential abort
@@ -481,7 +537,7 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
         message: "Stream started",
         conversationId: conversation.id,
         streamId: streamId,
-      })}\n\n`
+      })}\n\n`,
     );
     if (typeof res.flush === "function") res.flush();
     console.log("[STREAM] ✓ Connection established with client");
@@ -515,6 +571,11 @@ RESEARCH MODE INSTRUCTIONS:
 11. Always summarize your findings at the end.
 12. Always ask a follow-up question to keep the conversation going.
 
+AVAILABLE TOOLS:
+- Use web_search for current information and research
+- Use generate_image to create images when users ask for visual content
+- Use create_reminder when users ask to be reminded of something, set a reminder, or schedule a notification
+
 Your goal is to be the most thorough research assistant possible, leaving no stone unturned in finding accurate, up-to-date information.`,
       });
       console.log("[STREAM] Added RESEARCH MODE system prompt");
@@ -538,14 +599,21 @@ THINK MODE INSTRUCTIONS:
 11. Always summarize your findings at the end.
 12. Always ask a follow-up question to keep the conversation going.
 
-You have access to web search for current information and image generation if needed. Use these tools when they would enhance your analysis.`,
+AVAILABLE TOOLS:
+- Use web_search for current information when needed
+- Use generate_image to create images when users ask for visual content
+- Use create_reminder when users ask to be reminded of something, set a reminder, or schedule a notification
+
+Use these tools when they would enhance your analysis.`,
       });
       console.log("[STREAM] Added THINK MODE system prompt");
     } else {
       // QUICK MODE (default): Fast, concise responses - SHORT system prompt for speed
       messages.push({
         role: "system",
-        content: `You are Erudite AIC, a fast AI assistant. Be direct and concise. Use markdown. Give short, accurate answers. Give long answers if required but always summarize your findings at the end if its a long answer. Always ask a follow-up question to keep the conversation going.`,
+        content: `You are Erudite AIC, a fast AI assistant. Be direct and concise. Use markdown. Give short, accurate answers. Give long answers if required but always summarize your findings at the end if its a long answer. Always ask a follow-up question to keep the conversation going.
+
+You can use web_search for current info, generate_image for visuals, and create_reminder when users ask to set reminders.`,
       });
       console.log("[STREAM] Added QUICK MODE system prompt");
     }
@@ -561,7 +629,7 @@ You have access to web search for current information and image generation if ne
         recentMessages.length,
         "of",
         conversation.messages.length,
-        "messages"
+        "messages",
       );
       recentMessages.forEach((msg) => {
         messages.push({
@@ -596,7 +664,7 @@ You have access to web search for current information and image generation if ne
         userMessageContent = "Please analyze this document.";
       }
       console.log(
-        "[STREAM] Document content appended to AI message (not stored)"
+        "[STREAM] Document content appended to AI message (not stored)",
       );
     }
 
@@ -624,7 +692,7 @@ You have access to web search for current information and image generation if ne
       });
       console.log(
         "[STREAM] ✓ User message with image added. Base64 length:",
-        base64Image.length
+        base64Image.length,
       );
       if (documentContent) {
         console.log("[STREAM] ✓ Document content also included in AI message");
@@ -639,7 +707,7 @@ You have access to web search for current information and image generation if ne
     }
     console.log("[STREAM] Total messages in context:", messages.length);
 
-    // Always provide both web search and image generation tools for all modes
+    // Always provide web search, image generation, and reminder creation tools for all modes
     // Let the LLM decide when to use them based on the user's request
     const tools = [
       { type: "web_search" },
@@ -674,12 +742,36 @@ You have access to web search for current information and image generation if ne
           },
         },
       },
+      {
+        type: "function",
+        function: {
+          name: "create_reminder",
+          description:
+            "Create a reminder for the user based on their request. Use this when the user asks to be reminded, set a reminder, schedule a notification, or remember something at a specific time. The reminder will be parsed from natural language to determine timing and frequency.",
+          parameters: {
+            type: "object",
+            properties: {
+              prompt: {
+                type: "string",
+                description:
+                  "The full natural language reminder request from the user. This should include what to remind about and when (e.g., 'Remind me to call mom every Sunday at 3pm', 'Remember to take medicine daily at 9am', 'Set a reminder for the meeting tomorrow at 2pm'). Maximum 500 characters.",
+              },
+              timezone: {
+                type: "string",
+                description:
+                  "The user's timezone in IANA format (e.g., 'America/New_York', 'Europe/London', 'Asia/Tokyo'). If not known, use 'UTC' as default.",
+              },
+            },
+            required: ["prompt"],
+          },
+        },
+      },
     ];
 
     const toolChoice = "auto";
     console.log(
       "[STREAM] Tools enabled for all modes:",
-      tools.map((t) => t.type || t.function?.name)
+      tools.map((t) => t.type || t.function?.name),
     );
 
     // Determine if we should use the new 'responses' API (if available) or standard chat completions
@@ -688,7 +780,7 @@ You have access to web search for current information and image generation if ne
     console.log("[STREAM] Using 'responses' API:", useResponsesApi);
     if (imageFile) {
       console.log(
-        "[STREAM] Image detected - will include as attachment in API request"
+        "[STREAM] Image detected - will include as attachment in API request",
       );
     }
 
@@ -738,7 +830,7 @@ You have access to web search for current information and image generation if ne
       console.log(
         "[STREAM] Converted",
         messages.length,
-        "messages to responses API format"
+        "messages to responses API format",
       );
       if (imageFile) {
         console.log("[STREAM] Image included in input with type: input_image");
@@ -761,13 +853,13 @@ You have access to web search for current information and image generation if ne
       stream = await openai.responses.create(responsesParams);
       timings.openaiConnect = Date.now() - openaiStartTime;
       console.log(
-        `[STREAM] ⏱️ OpenAI connection took: ${timings.openaiConnect}ms`
+        `[STREAM] ⏱️ OpenAI connection took: ${timings.openaiConnect}ms`,
       );
     } else {
       // Fallback to standard chat completions
       console.log(
         "[STREAM] Starting stream with chat completions. Model:",
-        model
+        model,
       );
 
       // Chat completions API only supports 'function' type tools, not 'web_search'
@@ -775,7 +867,7 @@ You have access to web search for current information and image generation if ne
       const chatTools = tools.filter((t) => t.type !== "web_search");
       console.log(
         "[STREAM] Chat completions tools:",
-        chatTools.map((t) => t.type || t.function?.name)
+        chatTools.map((t) => t.type || t.function?.name),
       );
 
       // Start streaming immediately - NO PREFLIGHT
@@ -797,7 +889,7 @@ You have access to web search for current information and image generation if ne
       stream = await openai.chat.completions.create(chatParams);
       timings.openaiConnect = Date.now() - openaiStartTime;
       console.log(
-        `[STREAM] ⏱️ OpenAI connection took: ${timings.openaiConnect}ms`
+        `[STREAM] ⏱️ OpenAI connection took: ${timings.openaiConnect}ms`,
       );
     }
 
@@ -834,8 +926,8 @@ You have access to web search for current information and image generation if ne
               }
               return value;
             },
-            2
-          )
+            2,
+          ),
         );
       }
 
@@ -855,7 +947,7 @@ You have access to web search for current information and image generation if ne
         // Extract citations from web search results
         if (chunk.response?.output) {
           console.log(
-            "[STREAM] Checking response.completed for citations and images..."
+            "[STREAM] Checking response.completed for citations and images...",
           );
 
           // Look for citations in message content annotations
@@ -870,7 +962,7 @@ You have access to web search for current information and image generation if ne
                     if (annotation.type === "url_citation") {
                       // Avoid duplicate citations (same URL)
                       const existingCitation = citations.find(
-                        (c) => c.url === annotation.url
+                        (c) => c.url === annotation.url,
                       );
                       if (!existingCitation) {
                         citations.push({
@@ -882,7 +974,7 @@ You have access to web search for current information and image generation if ne
                         });
                         console.log(
                           "[STREAM] ✓ Citation found:",
-                          annotation.title || annotation.url
+                          annotation.title || annotation.url,
                         );
                       }
                     }
@@ -894,7 +986,7 @@ You have access to web search for current information and image generation if ne
 
           if (citations.length > 0) {
             console.log(
-              `[STREAM] ✓ Total citations extracted: ${citations.length}`
+              `[STREAM] ✓ Total citations extracted: ${citations.length}`,
             );
             // Send citations event to client
             res.write(
@@ -902,7 +994,7 @@ You have access to web search for current information and image generation if ne
                 type: "citations",
                 citations: citations,
                 timestamp: new Date().toISOString(),
-              })}\n\n`
+              })}\n\n`,
             );
             if (typeof res.flush === "function") res.flush();
           }
@@ -928,8 +1020,8 @@ You have access to web search for current information and image generation if ne
                     }
                     return value;
                   },
-                  2
-                )
+                  2,
+                ),
               );
 
               // Extract image data from various possible structures
@@ -962,7 +1054,7 @@ You have access to web search for current information and image generation if ne
                 // Upload to Cloudinary
                 const uploadResult = await uploadBase64ToCloudinary(
                   imageData,
-                  revisedPrompt
+                  revisedPrompt,
                 );
                 generatedImages.push({
                   url: uploadResult.url,
@@ -975,7 +1067,7 @@ You have access to web search for current information and image generation if ne
                     url: uploadResult.url,
                     revised_prompt: revisedPrompt,
                     timestamp: new Date().toISOString(),
-                  })}\n\n`
+                  })}\n\n`,
                 );
                 if (typeof res.flush === "function") res.flush();
                 console.log("[STREAM] ✓ Image sent from response.completed");
@@ -990,7 +1082,7 @@ You have access to web search for current information and image generation if ne
         // Handle native image generation results from the responses API
         const item = chunk.item;
         console.log(
-          "[STREAM] Image generation result received from responses API"
+          "[STREAM] Image generation result received from responses API",
         );
         console.log(
           "[STREAM] Image item structure:",
@@ -1003,8 +1095,8 @@ You have access to web search for current information and image generation if ne
               }
               return value;
             },
-            2
-          )
+            2,
+          ),
         );
         console.log("[STREAM] Item top-level keys:", Object.keys(item));
 
@@ -1015,7 +1107,7 @@ You have access to web search for current information and image generation if ne
         // Check if item.result IS the base64 string directly (OpenAI Responses API format)
         if (item.result && typeof item.result === "string") {
           console.log(
-            "[STREAM] item.result is a string (base64 data directly)"
+            "[STREAM] item.result is a string (base64 data directly)",
           );
           imageData = item.result;
         }
@@ -1030,7 +1122,7 @@ You have access to web search for current information and image generation if ne
           const imageResult = item.result;
           console.log(
             "[STREAM] Checking item.result as object, keys:",
-            Object.keys(imageResult)
+            Object.keys(imageResult),
           );
           imageData =
             imageResult.b64_json || imageResult.image || imageResult.data;
@@ -1052,7 +1144,7 @@ You have access to web search for current information and image generation if ne
                   url: imageResult.url,
                   revised_prompt: revisedPrompt,
                   timestamp: new Date().toISOString(),
-                })}\n\n`
+                })}\n\n`,
               );
               if (typeof res.flush === "function") res.flush();
               console.log("[STREAM] ✓ Image URL event sent to client");
@@ -1087,7 +1179,7 @@ You have access to web search for current information and image generation if ne
                   // Upload to Cloudinary
                   const uploadResult = await uploadBase64ToCloudinary(
                     imgData,
-                    imgPrompt
+                    imgPrompt,
                   );
                   generatedImages.push({
                     url: uploadResult.url,
@@ -1100,7 +1192,7 @@ You have access to web search for current information and image generation if ne
                       url: uploadResult.url,
                       revised_prompt: imgPrompt,
                       timestamp: new Date().toISOString(),
-                    })}\n\n`
+                    })}\n\n`,
                   );
                   if (typeof res.flush === "function") res.flush();
                 }
@@ -1117,7 +1209,7 @@ You have access to web search for current information and image generation if ne
         // Last resort: scan all properties for base64 data
         if (!imageData) {
           console.log(
-            "[STREAM] Scanning all item properties for image data..."
+            "[STREAM] Scanning all item properties for image data...",
           );
           const findBase64InObject = (obj, depth = 0) => {
             if (depth > 3 || !obj || typeof obj !== "object") return null;
@@ -1125,7 +1217,7 @@ You have access to web search for current information and image generation if ne
               if (typeof value === "string" && value.length > 1000) {
                 // Likely base64 image data
                 console.log(
-                  `[STREAM] Found potential base64 at key: ${key}, length: ${value.length}`
+                  `[STREAM] Found potential base64 at key: ${key}, length: ${value.length}`,
                 );
                 return value;
               }
@@ -1148,7 +1240,7 @@ You have access to web search for current information and image generation if ne
             // Upload to Cloudinary
             const uploadResult = await uploadBase64ToCloudinary(
               imageData,
-              revisedPrompt
+              revisedPrompt,
             );
             generatedImages.push({
               url: uploadResult.url,
@@ -1162,7 +1254,7 @@ You have access to web search for current information and image generation if ne
                 url: uploadResult.url,
                 revised_prompt: revisedPrompt,
                 timestamp: new Date().toISOString(),
-              })}\n\n`
+              })}\n\n`,
             );
             if (typeof res.flush === "function") res.flush();
             console.log("[STREAM] ✓ Image URL event sent to client");
@@ -1171,7 +1263,7 @@ You have access to web search for current information and image generation if ne
           }
         } else {
           console.log(
-            "[STREAM] ⚠ No image data found in image_generation_call item"
+            "[STREAM] ⚠ No image data found in image_generation_call item",
           );
         }
       } else if (
@@ -1186,7 +1278,7 @@ You have access to web search for current information and image generation if ne
             message: "Generating image...",
             tool: "image_generation",
             timestamp: new Date().toISOString(),
-          })}\n\n`
+          })}\n\n`,
         );
         if (typeof res.flush === "function") res.flush();
       } else if (
@@ -1224,7 +1316,7 @@ You have access to web search for current information and image generation if ne
                 // Upload to Cloudinary
                 const uploadResult = await uploadBase64ToCloudinary(
                   imgData,
-                  content.revised_prompt || revisedPrompt
+                  content.revised_prompt || revisedPrompt,
                 );
                 generatedImages.push({
                   url: uploadResult.url,
@@ -1237,7 +1329,7 @@ You have access to web search for current information and image generation if ne
                     url: uploadResult.url,
                     revised_prompt: content.revised_prompt || revisedPrompt,
                     timestamp: new Date().toISOString(),
-                  })}\n\n`
+                  })}\n\n`,
                 );
                 if (typeof res.flush === "function") res.flush();
                 console.log("[STREAM] ✓ Image event sent from content array");
@@ -1254,7 +1346,7 @@ You have access to web search for current information and image generation if ne
             // Upload to Cloudinary
             const uploadResult = await uploadBase64ToCloudinary(
               imageData,
-              revisedPrompt
+              revisedPrompt,
             );
             generatedImages.push({
               url: uploadResult.url,
@@ -1267,7 +1359,7 @@ You have access to web search for current information and image generation if ne
                 url: uploadResult.url,
                 revised_prompt: revisedPrompt,
                 timestamp: new Date().toISOString(),
-              })}\n\n`
+              })}\n\n`,
             );
             if (typeof res.flush === "function") res.flush();
             console.log("[STREAM] ✓ Direct image event sent to client");
@@ -1297,7 +1389,7 @@ You have access to web search for current information and image generation if ne
             // Upload to Cloudinary
             const uploadResult = await uploadBase64ToCloudinary(
               imageData,
-              revisedPrompt
+              revisedPrompt,
             );
             generatedImages.push({
               url: uploadResult.url,
@@ -1310,11 +1402,11 @@ You have access to web search for current information and image generation if ne
                 url: uploadResult.url,
                 revised_prompt: revisedPrompt,
                 timestamp: new Date().toISOString(),
-              })}\n\n`
+              })}\n\n`,
             );
             if (typeof res.flush === "function") res.flush();
             console.log(
-              "[STREAM] ✓ Image sent from image_generation.done event"
+              "[STREAM] ✓ Image sent from image_generation.done event",
             );
           }
         }
@@ -1364,7 +1456,7 @@ You have access to web search for current information and image generation if ne
             type: "chunk",
             content: delta.content,
             timestamp: new Date().toISOString(),
-          })}\n\n`
+          })}\n\n`,
         );
         if (typeof res.flush === "function") res.flush();
       }
@@ -1390,7 +1482,7 @@ You have access to web search for current information and image generation if ne
         console.log(
           "[STREAM] Stream aborted by user, stopping at",
           fullResponse.length,
-          "characters"
+          "characters",
         );
         finishReason = "stopped";
         break;
@@ -1413,7 +1505,7 @@ You have access to web search for current information and image generation if ne
       for (const call of toolCalls) {
         console.log(
           "[STREAM] Executing tool:",
-          call.function?.name || call.type
+          call.function?.name || call.type,
         );
 
         if (call.function?.name === "generate_image") {
@@ -1429,14 +1521,14 @@ You have access to web search for current information and image generation if ne
               message: "Generating image...",
               tool: "generate_image",
               timestamp: new Date().toISOString(),
-            })}\n\n`
+            })}\n\n`,
           );
           if (typeof res.flush === "function") res.flush();
 
           const result = await performImageGeneration(
             args.prompt,
             args.size,
-            args.quality
+            args.quality,
           );
 
           // Handle result
@@ -1446,7 +1538,7 @@ You have access to web search for current information and image generation if ne
             if (resultObj.success && resultObj.b64_json) {
               // Upload base64 image to Cloudinary
               console.log(
-                "[STREAM] Uploading generated image to Cloudinary..."
+                "[STREAM] Uploading generated image to Cloudinary...",
               );
               let imageUrl = null;
               let imagePublicId = null;
@@ -1455,18 +1547,18 @@ You have access to web search for current information and image generation if ne
                 const uploadResult = await uploadToCloudinary(
                   imageBuffer,
                   "perplex/generated-images",
-                  "image"
+                  "image",
                 );
                 imageUrl = uploadResult.secure_url;
                 imagePublicId = uploadResult.public_id;
                 console.log(
                   "[STREAM] ✓ Generated image uploaded to Cloudinary:",
-                  imageUrl
+                  imageUrl,
                 );
               } catch (uploadError) {
                 console.error(
                   "[STREAM] ⚠️ Failed to upload generated image to Cloudinary:",
-                  uploadError.message
+                  uploadError.message,
                 );
                 // Fall back to base64 if upload fails
               }
@@ -1483,7 +1575,7 @@ You have access to web search for current information and image generation if ne
                   url: imageUrl,
                   revised_prompt: resultObj.revised_prompt,
                   timestamp: new Date().toISOString(),
-                })}\n\n`
+                })}\n\n`,
               );
               if (typeof res.flush === "function") res.flush();
 
@@ -1501,6 +1593,49 @@ You have access to web search for current information and image generation if ne
             role: "tool",
             tool_call_id: call.id,
             content: toolResponse,
+          });
+        } else if (call.function?.name === "create_reminder") {
+          let args = {};
+          try {
+            args = JSON.parse(call.function.arguments || "{}");
+          } catch (_) {}
+
+          // Send progress
+          res.write(
+            `data: ${JSON.stringify({
+              type: "progress",
+              message: "Creating reminder...",
+              tool: "create_reminder",
+              timestamp: new Date().toISOString(),
+            })}\n\n`,
+          );
+          if (typeof res.flush === "function") res.flush();
+
+          const result = await performCreateReminder(
+            req.user.id,
+            args.prompt,
+            args.timezone,
+          );
+
+          // Send reminder created event
+          try {
+            const resultObj = JSON.parse(result);
+            if (resultObj.success) {
+              res.write(
+                `data: ${JSON.stringify({
+                  type: "reminder_created",
+                  reminder: resultObj.reminder,
+                  timestamp: new Date().toISOString(),
+                })}\n\n`,
+              );
+              if (typeof res.flush === "function") res.flush();
+            }
+          } catch (_) {}
+
+          messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: result,
           });
         } else {
           // Handle other tools (like web_search if it returns a tool call)
@@ -1551,7 +1686,7 @@ You have access to web search for current information and image generation if ne
             const result = await uploadToCloudinary(
               imageFile.buffer,
               "perplex/images",
-              "image"
+              "image",
             );
             imageUrl = result.secure_url;
             imagePublicId = result.public_id;
@@ -1559,10 +1694,10 @@ You have access to web search for current information and image generation if ne
           } catch (uploadError) {
             console.error(
               "[STREAM] ❌ Image upload failed:",
-              uploadError.message
+              uploadError.message,
             );
           }
-        })()
+        })(),
       );
     }
 
@@ -1574,7 +1709,7 @@ You have access to web search for current information and image generation if ne
             const result = await uploadToCloudinary(
               documentFile.buffer,
               "perplex/documents",
-              "raw"
+              "raw",
             );
             documentUrl = result.secure_url;
             documentPublicId = result.public_id;
@@ -1582,10 +1717,10 @@ You have access to web search for current information and image generation if ne
           } catch (uploadError) {
             console.error(
               "[STREAM] ❌ Document upload failed:",
-              uploadError.message
+              uploadError.message,
             );
           }
-        })()
+        })(),
       );
     }
 
@@ -1597,7 +1732,7 @@ You have access to web search for current information and image generation if ne
     // Send done event with document/image URLs included
     console.log(`[STREAM] ✓ Stream completed. Length: ${fullResponse.length}`);
     console.log(
-      `[STREAM] Citations: ${citations.length}, Images: ${generatedImages.length}`
+      `[STREAM] Citations: ${citations.length}, Images: ${generatedImages.length}`,
     );
     res.write(
       `data: ${JSON.stringify({
@@ -1621,7 +1756,7 @@ You have access to web search for current information and image generation if ne
             }
           : undefined,
         timestamp: new Date().toISOString(),
-      })}\n\n`
+      })}\n\n`,
     );
     if (typeof res.flush === "function") res.flush();
 
@@ -1635,7 +1770,7 @@ You have access to web search for current information and image generation if ne
     console.log(`[STREAM] ⏱️ Database ops: ${timings.database || 0}ms`);
     console.log(`[STREAM] ⏱️ OpenAI connect: ${timings.openaiConnect || 0}ms`);
     console.log(
-      `[STREAM] ⏱️ Time to first chunk: ${timings.firstChunk || 0}ms`
+      `[STREAM] ⏱️ Time to first chunk: ${timings.firstChunk || 0}ms`,
     );
     console.log(`[STREAM] ⏱️ Total duration: ${totalDuration}ms`);
     console.log("[STREAM] ⏱️ ======================");
@@ -1644,7 +1779,7 @@ You have access to web search for current information and image generation if ne
     console.log(
       "[STREAM] Final response length:",
       fullResponse.length,
-      "characters"
+      "characters",
     );
     res.write(`data: ${JSON.stringify({ type: "close" })}\n\n`);
     if (typeof res.flush === "function") res.flush();
@@ -1704,7 +1839,7 @@ You have access to web search for current information and image generation if ne
           console.log("[STREAM-BG] ✓ Conversation title generated");
         }
         console.log(
-          "[STREAM-BG] ✓ All database operations completed successfully"
+          "[STREAM-BG] ✓ All database operations completed successfully",
         );
       } catch (dbError) {
         console.error("[STREAM-BG] ❌ Error saving to database:", dbError);
@@ -1727,7 +1862,7 @@ You have access to web search for current information and image generation if ne
       } catch (historyError) {
         console.error(
           "[STREAM-BG] ⚠️ Failed to save search history:",
-          historyError.message
+          historyError.message,
         );
       }
     })();
@@ -1755,7 +1890,7 @@ You have access to web search for current information and image generation if ne
         message: "Stream error occurred",
         error: error.message,
         timestamp: new Date().toISOString(),
-      })}\n\n`
+      })}\n\n`,
     );
     // ensure heartbeat is cleared if set
     try {
@@ -1815,7 +1950,7 @@ router.post("/stop", auth, async (req, res) => {
 
     console.log(
       "[STOP] Stream stopped successfully. Partial response length:",
-      partialResponse?.length || 0
+      partialResponse?.length || 0,
     );
 
     res.json({
@@ -1931,7 +2066,7 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
     console.log(
       `[SIMPLE] Response received from ${model} - Length: ${
         response.length
-      } chars, Tokens used: ${completion.usage?.total_tokens || "N/A"}`
+      } chars, Tokens used: ${completion.usage?.total_tokens || "N/A"}`,
     );
 
     // Save messages to database
@@ -1982,7 +2117,7 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
     console.error("Chat error:", error);
     const { status, body } = toAIErrorResponse(
       error,
-      "Failed to get AI response"
+      "Failed to get AI response",
     );
     return res.status(status).json(body);
   }
@@ -2077,7 +2212,7 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
     }
 
     console.log(
-      `[ASK] Sending request to model: ${model}, Has image: ${!!imageFile}`
+      `[ASK] Sending request to model: ${model}, Has image: ${!!imageFile}`,
     );
 
     const completion = await openai.chat.completions.create({
@@ -2089,7 +2224,7 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
     console.log(
       `[ASK] Response received from ${model} - Length: ${
         response.length
-      } chars, Tokens used: ${completion.usage?.total_tokens || "N/A"}`
+      } chars, Tokens used: ${completion.usage?.total_tokens || "N/A"}`,
     );
 
     // Upload image to Cloudinary if present
@@ -2101,7 +2236,7 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
         const result = await uploadToCloudinary(
           imageFile.buffer,
           "perplex/images",
-          "image"
+          "image",
         );
         imageUrl = result.secure_url;
         imagePublicId = result.public_id;
@@ -2164,7 +2299,7 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
     console.error("Chat image/ask error:", error);
     const { status, body } = toAIErrorResponse(
       error,
-      "Failed to get AI response"
+      "Failed to get AI response",
     );
     return res.status(status).json(body);
   }
@@ -2261,7 +2396,7 @@ router.post("/voice", auth, upload.single("audio"), async (req, res) => {
     });
     const userText = transcriptResp.text || transcriptResp;
     console.log(
-      `[VOICE] Transcription received - Text length: ${userText.length} chars`
+      `[VOICE] Transcription received - Text length: ${userText.length} chars`,
     );
 
     // Step 2: Get AI response using gpt-5-nano
@@ -2280,7 +2415,7 @@ router.post("/voice", auth, upload.single("audio"), async (req, res) => {
     });
     const aiText = aiResp.choices[0]?.message?.content || "";
     console.log(
-      `[VOICE] Response received from ${chatModel} - Length: ${aiText.length} chars`
+      `[VOICE] Response received from ${chatModel} - Length: ${aiText.length} chars`,
     );
 
     // Step 3: Synthesize AI response to voice using OpenAI TTS
@@ -2313,7 +2448,7 @@ router.post("/voice", auth, upload.single("audio"), async (req, res) => {
     console.error("Voice chat error:", error);
     const { status, body } = toAIErrorResponse(
       error,
-      "Failed to process voice chat"
+      "Failed to process voice chat",
     );
     return res.status(status).json(body);
   }
@@ -2754,7 +2889,7 @@ router.post("/upload-audio", auth, upload.single("audio"), async (req, res) => {
       !allowedExtensions.includes(fileExtension)
     ) {
       console.log(
-        `[UPLOAD-AUDIO] Invalid file type: ${audioFile.mimetype}, extension: ${fileExtension}`
+        `[UPLOAD-AUDIO] Invalid file type: ${audioFile.mimetype}, extension: ${fileExtension}`,
       );
       return res.status(400).json({
         success: false,
@@ -2768,7 +2903,7 @@ router.post("/upload-audio", auth, upload.single("audio"), async (req, res) => {
     const pcm16Buffer = await convertToPCM16(audioFile.buffer);
 
     console.log(
-      `[UPLOAD-AUDIO] Conversion successful. PCM16 size: ${pcm16Buffer.length} bytes`
+      `[UPLOAD-AUDIO] Conversion successful. PCM16 size: ${pcm16Buffer.length} bytes`,
     );
 
     // Encode to base64 for JSON response
@@ -2823,7 +2958,7 @@ router.post("/tts", auth, async (req, res) => {
     console.log("  - Text length:", text ? text.length : 0, "characters");
     console.log(
       "  - Text preview:",
-      text ? text.substring(0, 100) + (text.length > 100 ? "..." : "") : "N/A"
+      text ? text.substring(0, 100) + (text.length > 100 ? "..." : "") : "N/A",
     );
     console.log("  - Voice:", voice);
     console.log("  - Instructions:", instructions ? "Provided" : "None");
@@ -2875,12 +3010,12 @@ router.post("/tts", auth, async (req, res) => {
     if (!validFormats.includes(response_format)) {
       console.log(
         "[TTS] ❌ Validation failed: Invalid response format:",
-        response_format
+        response_format,
       );
       return res.status(400).json({
         success: false,
         message: `Invalid response format. Valid options: ${validFormats.join(
-          ", "
+          ", ",
         )}`,
       });
     }
@@ -2916,7 +3051,7 @@ router.post("/tts", auth, async (req, res) => {
       console.log(
         "[TTS] Instructions added:",
         instructions.substring(0, 100) +
-          (instructions.length > 100 ? "..." : "")
+          (instructions.length > 100 ? "..." : ""),
       );
     }
 
@@ -2960,7 +3095,7 @@ router.post("/tts", auth, async (req, res) => {
     console.error("[TTS] ❌ Error:", error);
     const { status, body } = toAIErrorResponse(
       error,
-      "Failed to convert text to speech"
+      "Failed to convert text to speech",
     );
     return res.status(status).json(body);
   }
@@ -3032,7 +3167,7 @@ router.post("/tts/stream", auth, async (req, res) => {
       return res.status(400).json({
         success: false,
         message: `Invalid response format. Valid options: ${validFormats.join(
-          ", "
+          ", ",
         )}`,
       });
     }
@@ -3097,7 +3232,7 @@ router.post("/tts/stream", auth, async (req, res) => {
     if (!res.headersSent) {
       const { status, body } = toAIErrorResponse(
         error,
-        "Failed to stream text to speech"
+        "Failed to stream text to speech",
       );
       return res.status(status).json(body);
     }
