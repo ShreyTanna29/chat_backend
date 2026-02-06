@@ -836,11 +836,34 @@ You can use web_search for current info, generate_image for visuals, and create_
         console.log("[STREAM] Image included in input with type: input_image");
       }
 
-      // Always provide both tools for responses API
+      // Always provide all tools for responses API
       const responsesTools = [
         { type: "web_search" },
         { type: "image_generation" },
-        { type: "reminder_creation" },
+        {
+          type: "function",
+          function: {
+            name: "create_reminder",
+            description:
+              "Create a reminder for the user based on their request. Use this when the user asks to be reminded, set a reminder, schedule a notification, or remember something at a specific time. The reminder will be parsed from natural language to determine timing and frequency.",
+            parameters: {
+              type: "object",
+              properties: {
+                prompt: {
+                  type: "string",
+                  description:
+                    "The full natural language reminder request from the user. This should include what to remind about and when (e.g., 'Remind me to call mom every Sunday at 3pm', 'Remember to take medicine daily at 9am', 'Set a reminder for the meeting tomorrow at 2pm'). Maximum 500 characters.",
+                },
+                timezone: {
+                  type: "string",
+                  description:
+                    "The user's timezone in IANA format (e.g., 'America/New_York', 'Europe/London', 'Asia/Tokyo'). If not known, use 'UTC' as default.",
+                },
+              },
+              required: ["prompt"],
+            },
+          },
+        },
       ];
 
       const openaiStartTime = Date.now();
@@ -864,10 +887,8 @@ You can use web_search for current info, generate_image for visuals, and create_
       );
 
       // Chat completions API only supports 'function' type tools, not 'web_search'
-      // Filter out web_search tool
-      const chatTools = tools.filter(
-        (t) => t.type !== "web_search" && t.type !== "reminder_creation",
-      );
+      // Filter out web_search tool (keep create_reminder since it's a function tool)
+      const chatTools = tools.filter((t) => t.type !== "web_search");
       console.log(
         "[STREAM] Chat completions tools:",
         chatTools.map((t) => t.type || t.function?.name),
