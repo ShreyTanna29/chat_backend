@@ -837,31 +837,30 @@ You can use web_search for current info, generate_image for visuals, and create_
       }
 
       // Always provide all tools for responses API
+      // Note: responses API expects flatter structure for function tools
       const responsesTools = [
         { type: "web_search" },
         { type: "image_generation" },
         {
           type: "function",
-          function: {
-            name: "create_reminder",
-            description:
-              "Create a reminder for the user based on their request. Use this when the user asks to be reminded, set a reminder, schedule a notification, or remember something at a specific time. The reminder will be parsed from natural language to determine timing and frequency.",
-            parameters: {
-              type: "object",
-              properties: {
-                prompt: {
-                  type: "string",
-                  description:
-                    "The full natural language reminder request from the user. This should include what to remind about and when (e.g., 'Remind me to call mom every Sunday at 3pm', 'Remember to take medicine daily at 9am', 'Set a reminder for the meeting tomorrow at 2pm'). Maximum 500 characters.",
-                },
-                timezone: {
-                  type: "string",
-                  description:
-                    "The user's timezone in IANA format (e.g., 'America/New_York', 'Europe/London', 'Asia/Tokyo'). If not known, use 'UTC' as default.",
-                },
+          name: "create_reminder",
+          description:
+            "Create a reminder for the user based on their request. Use this when the user asks to be reminded, set a reminder, schedule a notification, or remember something at a specific time. The reminder will be parsed from natural language to determine timing and frequency.",
+          parameters: {
+            type: "object",
+            properties: {
+              prompt: {
+                type: "string",
+                description:
+                  "The full natural language reminder request from the user. This should include what to remind about and when (e.g., 'Remind me to call mom every Sunday at 3pm', 'Remember to take medicine daily at 9am', 'Set a reminder for the meeting tomorrow at 2pm'). Maximum 500 characters.",
               },
-              required: ["prompt"],
+              timezone: {
+                type: "string",
+                description:
+                  "The user's timezone in IANA format (e.g., 'America/New_York', 'Europe/London', 'Asia/Tokyo'). If not known, use 'UTC' as default.",
+              },
             },
+            required: ["prompt"],
           },
         },
       ];
@@ -1529,13 +1528,18 @@ You can use web_search for current info, generate_image for visuals, and create_
       for (const call of toolCalls) {
         console.log(
           "[STREAM] Executing tool:",
-          call.function?.name || call.type,
+          call.function?.name || call.name || call.type,
         );
 
-        if (call.function?.name === "generate_image") {
+        if (
+          call.function?.name === "generate_image" ||
+          call.name === "generate_image"
+        ) {
           let args = {};
           try {
-            args = JSON.parse(call.function.arguments || "{}");
+            // Handle both chat completions format (call.function.arguments) and responses API format (call.arguments)
+            const argsStr = call.function?.arguments || call.arguments || "{}";
+            args = JSON.parse(argsStr);
           } catch (_) {}
 
           // Send progress
@@ -1618,10 +1622,15 @@ You can use web_search for current info, generate_image for visuals, and create_
             tool_call_id: call.id,
             content: toolResponse,
           });
-        } else if (call.function?.name === "create_reminder") {
+        } else if (
+          call.function?.name === "create_reminder" ||
+          call.name === "create_reminder"
+        ) {
           let args = {};
           try {
-            args = JSON.parse(call.function.arguments || "{}");
+            // Handle both chat completions format (call.function.arguments) and responses API format (call.arguments)
+            const argsStr = call.function?.arguments || call.arguments || "{}";
+            args = JSON.parse(argsStr);
           } catch (_) {}
 
           // Send progress
