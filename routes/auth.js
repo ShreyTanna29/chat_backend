@@ -740,4 +740,67 @@ router.post("/reset-password", async (req, res) => {
   }
 });
 
+/**
+ * Register or update push notification token
+ * @route   POST /api/auth/push-token
+ * @access  Private
+ */
+router.post("/push-token", auth, async (req, res) => {
+  try {
+    const { pushToken } = req.body;
+
+    if (!pushToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Push token is required",
+      });
+    }
+
+    // Validate that it's a valid Expo push token
+    const { isValidPushToken } = require("../utils/pushNotifications");
+    if (!isValidPushToken(pushToken)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid push token format",
+      });
+    }
+
+    // Update user's push token
+    await User.update(req.user.id, { pushToken });
+
+    res.status(200).json({
+      success: true,
+      message: "Push token registered successfully",
+    });
+  } catch (error) {
+    console.error("Register push token error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to register push token",
+    });
+  }
+});
+
+/**
+ * Delete push notification token (e.g., on logout)
+ * @route   DELETE /api/auth/push-token
+ * @access  Private
+ */
+router.delete("/push-token", auth, async (req, res) => {
+  try {
+    await User.update(req.user.id, { pushToken: null });
+
+    res.status(200).json({
+      success: true,
+      message: "Push token removed successfully",
+    });
+  } catch (error) {
+    console.error("Delete push token error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to remove push token",
+    });
+  }
+});
+
 module.exports = router;

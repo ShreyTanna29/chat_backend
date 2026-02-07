@@ -47,6 +47,7 @@ class User {
         avatar: true,
         isVerified: true,
         refreshToken: !excludePassword,
+        pushToken: true,
         searchHistory: true,
         preferences: true,
         createdAt: true,

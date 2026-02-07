@@ -1,7 +1,9 @@
 const cron = require("node-cron");
 const OpenAI = require("openai");
 const Reminder = require("../models/Reminder");
+const User = require("../models/User");
 const prisma = require("../config/database");
+const { sendReminderNotification } = require("./pushNotifications");
 
 // Store active cron jobs
 const activeJobs = new Map();
@@ -17,8 +19,41 @@ const openai = new OpenAI({
 async function executeReminder(reminder) {
   try {
     console.log(
-      `[REMINDER] Executing reminder ${reminder.id}: ${reminder.title}`
+      `[REMINDER] Executing reminder ${reminder.id}: ${reminder.title}`,
     );
+
+    // Get user's push token
+    const user = await User.findById(reminder.userId);
+
+    // Send push notification if user has a push token
+    if (user && user.pushToken) {
+      console.log(`[REMINDER] Sending push notification to user ${user.id}`);
+      const pushResult = await sendReminderNotification(
+        user.pushToken,
+        reminder,
+      );
+
+      if (pushResult.success) {
+        console.log(
+          `[REMINDER] Push notification sent successfully for reminder ${reminder.id}`,
+        );
+      } else {
+        console.error(
+          `[REMINDER] Failed to send push notification for reminder ${reminder.id}:`,
+          pushResult.error,
+        );
+
+        // If the device is not registered, clear the push token
+        if (pushResult.shouldInvalidateToken) {
+          console.log(`[REMINDER] Invalidating push token for user ${user.id}`);
+          await User.update(user.id, { pushToken: null });
+        }
+      }
+    } else {
+      console.log(
+        `[REMINDER] No push token found for user ${reminder.userId}, skipping push notification`,
+      );
+    }
 
     // Generate AI response for the reminder
     const response = await openai.chat.completions.create({
@@ -98,7 +133,7 @@ async function createReminderNotification(reminder, aiResponse) {
     });
 
     console.log(
-      `[REMINDER] Created conversation ${conversation.id} for reminder ${reminder.id}`
+      `[REMINDER] Created conversation ${conversation.id} for reminder ${reminder.id}`,
     );
     return conversation;
   } catch (error) {
@@ -145,7 +180,7 @@ function scheduleReminder(reminder) {
   // Validate cron expression
   if (!cron.validate(reminder.schedule)) {
     console.error(
-      `[REMINDER] Invalid cron expression for reminder ${reminder.id}: ${reminder.schedule}`
+      `[REMINDER] Invalid cron expression for reminder ${reminder.id}: ${reminder.schedule}`,
     );
     return;
   }
@@ -160,17 +195,17 @@ function scheduleReminder(reminder) {
       {
         scheduled: true,
         timezone: reminder.timezone || "UTC",
-      }
+      },
     );
 
     activeJobs.set(reminder.id, job);
     console.log(
-      `[REMINDER] Scheduled reminder ${reminder.id}: ${reminder.title} (${reminder.schedule})`
+      `[REMINDER] Scheduled reminder ${reminder.id}: ${reminder.title} (${reminder.schedule})`,
     );
   } catch (error) {
     console.error(
       `[REMINDER] Error scheduling reminder ${reminder.id}:`,
-      error
+      error,
     );
   }
 }
@@ -209,7 +244,7 @@ async function initializeScheduler() {
     }
 
     console.log(
-      `[REMINDER] Scheduler initialized with ${activeJobs.size} scheduled reminders`
+      `[REMINDER] Scheduler initialized with ${activeJobs.size} scheduled reminders`,
     );
   } catch (error) {
     console.error("[REMINDER] Error initializing scheduler:", error);

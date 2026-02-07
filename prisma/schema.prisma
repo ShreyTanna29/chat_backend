@@ -26,6 +26,7 @@ model User {
   refreshToken         String?
   resetPasswordToken   String?
   resetPasswordExpires DateTime?
+  pushToken            String? // Expo push notification token
   searchHistory        Json[]               @default([])
   preferences          Json                 @default("{\"theme\":\"auto\",\"language\":\"en\"}")
   createdAt            DateTime             @default(now())
