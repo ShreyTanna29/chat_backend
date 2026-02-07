@@ -1681,17 +1681,50 @@ You can use web_search for current info, generate_image for visuals, and create_
         }
       }
 
+      // Add instruction for the model to respond naturally after tool execution
+      messages.push({
+        role: "system",
+        content:
+          "The tool(s) have been executed successfully. Now provide a natural, conversational response to the user based on the tool results. Confirm what was done and provide any relevant information.",
+      });
+
       // Start second stream for final response
       console.log("[STREAM] Starting second stream after tools...");
+      console.log("[STREAM] Messages array length:", messages.length);
+      console.log(
+        "[STREAM] Last 3 messages:",
+        JSON.stringify(
+          messages.slice(-3).map((m) => ({
+            role: m.role,
+            content:
+              typeof m.content === "string"
+                ? m.content.substring(0, 100)
+                : m.content,
+            tool_calls: m.tool_calls
+              ? `${m.tool_calls.length} tool calls`
+              : undefined,
+            tool_call_id: m.tool_call_id,
+          })),
+          null,
+          2,
+        ),
+      );
+
+      // Don't use tool_choice: "none" as it may prevent the model from responding
+      // Let the model decide naturally whether to respond or use tools again
       const secondStream = await openai.chat.completions.create({
         model,
         messages,
         stream: true,
-        tools,
-        tool_choice: "none",
+        // Removed tool_choice to allow natural response
       });
 
+      let secondStreamChunkCount = 0;
       for await (const chunk of secondStream) {
+        secondStreamChunkCount++;
+        if (secondStreamChunkCount === 1) {
+          console.log("[STREAM] First chunk received from second stream");
+        }
         // Check if stream was aborted
         if (isAborted || abortController.signal.aborted) {
           console.log("[STREAM] Second stream aborted by user");
@@ -1700,6 +1733,14 @@ You can use web_search for current info, generate_image for visuals, and create_
         }
         await processChunk(chunk);
       }
+      console.log(
+        "[STREAM] Second stream completed. Chunks received:",
+        secondStreamChunkCount,
+      );
+      console.log(
+        "[STREAM] Full response length after second stream:",
+        fullResponse.length,
+      );
     }
 
     // Upload files to Cloudinary BEFORE sending done event so URLs can be included
