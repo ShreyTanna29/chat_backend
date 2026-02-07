@@ -1710,13 +1710,14 @@ You can use web_search for current info, generate_image for visuals, and create_
         ),
       );
 
-      // Don't use tool_choice: "none" as it may prevent the model from responding
-      // Let the model decide naturally whether to respond or use tools again
+      // Include tools in second request so OpenAI can properly interpret tool results
+      // Use tool_choice: "none" to ensure the model responds with text instead of calling tools again
       const secondStream = await openai.chat.completions.create({
         model,
         messages,
         stream: true,
-        // Removed tool_choice to allow natural response
+        tools: tools,
+        tool_choice: "none",
       });
 
       let secondStreamChunkCount = 0;
