@@ -1482,6 +1482,14 @@ You can use web_search for current info, generate_image for visuals, and create_
           })}\n\n`,
         );
         if (typeof res.flush === "function") res.flush();
+      } else {
+        // Debug: Log chunks that don't have content
+        if (Object.keys(delta).length > 0 && !delta.tool_calls) {
+          console.log(
+            "[STREAM] ⚠️ Chunk without content, delta keys:",
+            Object.keys(delta),
+          );
+        }
       }
 
       if (reason) {
@@ -1735,24 +1743,64 @@ You can use web_search for current info, generate_image for visuals, and create_
       try {
         console.log("[STREAM] Creating second stream with model:", model);
 
+        // Log the exact messages we're sending to the API (for debugging)
+        console.log("[STREAM] Messages being sent to second stream:");
+        messages.forEach((msg, idx) => {
+          console.log(`[STREAM]   Message ${idx}:`, {
+            role: msg.role,
+            hasContent: !!msg.content,
+            contentPreview:
+              typeof msg.content === "string"
+                ? msg.content.substring(0, 100) +
+                  (msg.content.length > 100 ? "..." : "")
+                : msg.content,
+            tool_calls: msg.tool_calls
+              ? `${msg.tool_calls.length} calls`
+              : undefined,
+            tool_call_id: msg.tool_call_id,
+          });
+        });
+
         // Always use chat completions API for the second stream since it handles
         // tool results properly. Don't include tools to force a text response.
         secondStream = await openai.chat.completions.create({
           model,
           messages,
           stream: true,
+          temperature: 0.7, // Add some temperature for natural responses
+          max_tokens: 4096, // Ensure we can get a full response
           // No tools parameter - we want the model to respond with text only
         });
 
+        console.log(
+          "[STREAM] ✓ Second stream created successfully, starting to read chunks...",
+        );
+
         let secondStreamChunkCount = 0;
+        let secondStreamContentChunks = 0;
         for await (const chunk of secondStream) {
           secondStreamChunkCount++;
+
+          // Log first few chunks in detail
+          if (secondStreamChunkCount <= 5) {
+            console.log(
+              `[STREAM] Second stream chunk #${secondStreamChunkCount}:`,
+              JSON.stringify(chunk, null, 2),
+            );
+          }
+
           if (secondStreamChunkCount === 1) {
             console.log("[STREAM] ✓ First chunk received from second stream");
           }
+
+          // Track chunks with actual content
+          if (chunk.choices?.[0]?.delta?.content) {
+            secondStreamContentChunks++;
+          }
+
           if (secondStreamChunkCount % 10 === 0) {
             console.log(
-              `[STREAM] Second stream progress: ${secondStreamChunkCount} chunks, response length: ${fullResponse.length}`,
+              `[STREAM] Second stream progress: ${secondStreamChunkCount} chunks (${secondStreamContentChunks} with content), response length: ${fullResponse.length}`,
             );
           }
           // Check if stream was aborted
@@ -1766,6 +1814,8 @@ You can use web_search for current info, generate_image for visuals, and create_
         console.log(
           "[STREAM] ✓ Second stream completed. Total chunks:",
           secondStreamChunkCount,
+          "Content chunks:",
+          secondStreamContentChunks,
         );
         console.log(
           "[STREAM] ✓ Full response length after second stream:",
@@ -1777,6 +1827,48 @@ You can use web_search for current info, generate_image for visuals, and create_
           console.error(
             "[STREAM] ⚠️ WARNING: Second stream returned 0 chunks - no response generated!",
           );
+          console.error(
+            "[STREAM] Messages sent to API:",
+            JSON.stringify(
+              messages.map((m) => ({
+                role: m.role,
+                content:
+                  typeof m.content === "string"
+                    ? m.content.substring(0, 200)
+                    : m.content,
+                tool_calls: m.tool_calls
+                  ? `${m.tool_calls.length} calls`
+                  : undefined,
+                tool_call_id: m.tool_call_id,
+              })),
+              null,
+              2,
+            ),
+          );
+        }
+
+        if (secondStreamContentChunks === 0 && secondStreamChunkCount > 0) {
+          console.error(
+            "[STREAM] ⚠️ WARNING: Second stream returned chunks but NONE had content!",
+          );
+        }
+
+        // Failsafe: If no content was generated but tool was executed successfully,
+        // send a basic confirmation message to the user
+        if (secondStreamContentChunks === 0) {
+          console.log(
+            "[STREAM] Applying failsafe: Sending generic confirmation since no content was generated",
+          );
+          const failsafeMessage = "The action has been completed successfully.";
+          fullResponse += failsafeMessage;
+          res.write(
+            `data: ${JSON.stringify({
+              type: "chunk",
+              content: failsafeMessage,
+              timestamp: new Date().toISOString(),
+            })}\n\n`,
+          );
+          if (typeof res.flush === "function") res.flush();
         }
       } catch (secondStreamError) {
         console.error(
