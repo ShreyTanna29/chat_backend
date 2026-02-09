@@ -931,6 +931,23 @@ You can use web_search for current info, generate_image for visuals, and create_
       return base64Data.substring(0, 100);
     };
 
+    // Helper to normalize tool_call IDs so they are always valid for the Chat Completions API
+    // (which limits tool_call.id length to 40 characters).
+    const normalizeToolCallId = (rawId, index) => {
+      let id = rawId || `tool_call_${index}`;
+      if (typeof id !== "string") {
+        id = String(id);
+      }
+      // Chat Completions requires max length 40 for tool_call.id
+      if (id.length > 40) {
+        // Keep it deterministic but short: prefix + index suffix
+        const suffix = `_${index}`;
+        const maxBaseLength = 40 - suffix.length;
+        id = id.slice(0, Math.max(1, maxBaseLength)) + suffix;
+      }
+      return id;
+    };
+
     // Helper to process stream chunks
     const processChunk = async (chunk) => {
       // Adapt to different chunk structures if necessary
@@ -1396,11 +1413,9 @@ You can use web_search for current info, generate_image for visuals, and create_
       ) {
         // Handle custom function tools (like create_reminder) when using the Responses API
         const item = chunk.item;
-        const callId =
-          item.id ||
-          item.call_id ||
-          item.name ||
-          `function_call_${toolCalls.length}`;
+        const rawCallId =
+          item.id || item.call_id || item.name || `function_call_${toolCalls.length}`;
+        const callId = normalizeToolCallId(rawCallId, toolCalls.length);
 
         let idx = functionCallIdToIndex[callId];
         if (idx === undefined) {
@@ -1436,7 +1451,10 @@ You can use web_search for current info, generate_image for visuals, and create_
         // Create a placeholder entry if we somehow see arguments before the function_call item
         if (idx < 0) {
           idx = toolCalls.length;
-          const placeholderId = id || `function_call_${idx}`;
+          const placeholderId = normalizeToolCallId(
+            id || `function_call_${idx}`,
+            idx,
+          );
           functionCallIdToIndex[placeholderId] = idx;
           toolCalls[idx] = {
             id: placeholderId,
@@ -1530,12 +1548,13 @@ You can use web_search for current info, generate_image for visuals, and create_
           const idx = tc.index;
           if (!toolCalls[idx]) {
             toolCalls[idx] = {
-              id: tc.id,
+              id: normalizeToolCallId(tc.id, idx),
               type: tc.type,
               function: { name: "", arguments: "" },
             };
           }
-          if (tc.id) toolCalls[idx].id = tc.id;
+          if (tc.id)
+            toolCalls[idx].id = normalizeToolCallId(tc.id, idx);
           if (tc.type) toolCalls[idx].type = tc.type;
           if (tc.function?.name)
             toolCalls[idx].function.name += tc.function.name;
