@@ -1860,7 +1860,6 @@ You can use web_search for current info, generate_image for visuals, and create_
           messages,
           stream: true,
           temperature: 0.7, // Add some temperature for natural responses
-          max_tokens: 4096, // Ensure we can get a full response
           // No tools parameter - we want the model to respond with text only
         });
 
