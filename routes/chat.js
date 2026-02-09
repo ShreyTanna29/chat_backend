@@ -1517,6 +1517,21 @@ You can use web_search for current info, generate_image for visuals, and create_
     if (streamEndedWithToolCalls && toolCalls.length > 0) {
       console.log("[STREAM] Tool calls detected:", toolCalls.length);
 
+      // WHY WE NEED A SECOND STREAM:
+      // -----------------------------
+      // This is the standard OpenAI tool calling flow:
+      // 1. First stream: Model analyzes the user request and decides to call a tool
+      //    - Stream ends with finish_reason="tool_calls"
+      //    - We get the tool call details (function name, arguments)
+      // 2. We execute the tool (e.g., create reminder, generate image)
+      // 3. Second stream: We send the tool results back to the model
+      //    - Model reads the tool results
+      //    - Model generates a natural language response to the user
+      //    - Example: "I've created a reminder for you to call mom on Sunday at 3pm"
+      //
+      // Without the second stream, the user would only see the tool being executed
+      // but wouldn't get any conversational confirmation or explanation.
+
       // Append assistant message with tool calls
       messages.push({
         role: "assistant",
@@ -1681,24 +1696,18 @@ You can use web_search for current info, generate_image for visuals, and create_
         }
       }
 
-      // Add instruction for the model to respond naturally after tool execution
-      messages.push({
-        role: "system",
-        content:
-          "The tool(s) have been executed successfully. Now provide a natural, conversational response to the user based on the tool results. Confirm what was done and provide any relevant information.",
-      });
-
       // Start second stream for final response
-      console.log("[STREAM] Starting second stream after tools...");
+      // The model will naturally respond to the tool results without needing extra instructions
+      console.log("[STREAM] Starting second stream after tool execution...");
       console.log("[STREAM] Messages array length:", messages.length);
       console.log(
-        "[STREAM] Last 3 messages:",
+        "[STREAM] Last 5 messages:",
         JSON.stringify(
-          messages.slice(-3).map((m) => ({
+          messages.slice(-5).map((m) => ({
             role: m.role,
             content:
               typeof m.content === "string"
-                ? m.content.substring(0, 100)
+                ? m.content.substring(0, 150) + "..."
                 : m.content,
             tool_calls: m.tool_calls
               ? `${m.tool_calls.length} tool calls`
@@ -1710,43 +1719,41 @@ You can use web_search for current info, generate_image for visuals, and create_
         ),
       );
 
-      // Create second stream using the same API as the first stream
-      // Use tool_choice: "none" to ensure the model responds with text instead of calling tools again
+      // Notify client that we're generating the response
+      res.write(
+        `data: ${JSON.stringify({
+          type: "progress",
+          message: "Generating response...",
+          timestamp: new Date().toISOString(),
+        })}\n\n`,
+      );
+      if (typeof res.flush === "function") res.flush();
+
+      // Create second stream - don't include tools since we want text response only
       let secondStream;
 
       try {
-        if (useResponsesApi) {
-          // For responses API, need to convert messages back to input format
-          // For simplicity in tool result handling, we'll use chat completions API
-          // which supports tool results natively
-          console.log(
-            "[STREAM] Using chat completions API for second stream (tool results)",
-          );
-          // Filter out web_search tools for chat completions
-          const chatTools = tools.filter((t) => t.type !== "web_search");
-          secondStream = await openai.chat.completions.create({
-            model,
-            messages,
-            stream: true,
-            tools: chatTools.length > 0 ? chatTools : undefined,
-            tool_choice: "none",
-          });
-        } else {
-          // Standard chat completions API
-          secondStream = await openai.chat.completions.create({
-            model,
-            messages,
-            stream: true,
-            tools: tools,
-            tool_choice: "none",
-          });
-        }
+        console.log("[STREAM] Creating second stream with model:", model);
+
+        // Always use chat completions API for the second stream since it handles
+        // tool results properly. Don't include tools to force a text response.
+        secondStream = await openai.chat.completions.create({
+          model,
+          messages,
+          stream: true,
+          // No tools parameter - we want the model to respond with text only
+        });
 
         let secondStreamChunkCount = 0;
         for await (const chunk of secondStream) {
           secondStreamChunkCount++;
           if (secondStreamChunkCount === 1) {
-            console.log("[STREAM] First chunk received from second stream");
+            console.log("[STREAM] ✓ First chunk received from second stream");
+          }
+          if (secondStreamChunkCount % 10 === 0) {
+            console.log(
+              `[STREAM] Second stream progress: ${secondStreamChunkCount} chunks, response length: ${fullResponse.length}`,
+            );
           }
           // Check if stream was aborted
           if (isAborted || abortController.signal.aborted) {
@@ -1757,15 +1764,38 @@ You can use web_search for current info, generate_image for visuals, and create_
           await processChunk(chunk);
         }
         console.log(
-          "[STREAM] Second stream completed. Chunks received:",
+          "[STREAM] ✓ Second stream completed. Total chunks:",
           secondStreamChunkCount,
         );
         console.log(
-          "[STREAM] Full response length after second stream:",
+          "[STREAM] ✓ Full response length after second stream:",
           fullResponse.length,
+          "characters",
         );
+
+        if (secondStreamChunkCount === 0) {
+          console.error(
+            "[STREAM] ⚠️ WARNING: Second stream returned 0 chunks - no response generated!",
+          );
+        }
       } catch (secondStreamError) {
-        console.error("[STREAM] ❌ Error in second stream:", secondStreamError);
+        console.error(
+          "[STREAM] ❌ Error in second stream:",
+          secondStreamError.message,
+        );
+        console.error("[STREAM] Error stack:", secondStreamError.stack);
+        console.error(
+          "[STREAM] Error details:",
+          JSON.stringify(
+            {
+              status: secondStreamError.status,
+              code: secondStreamError.code,
+              type: secondStreamError.type,
+            },
+            null,
+            2,
+          ),
+        );
         // Send error to client but continue with response
         res.write(
           `data: ${JSON.stringify({
