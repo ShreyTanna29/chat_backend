@@ -1710,38 +1710,74 @@ You can use web_search for current info, generate_image for visuals, and create_
         ),
       );
 
-      // Include tools in second request so OpenAI can properly interpret tool results
+      // Create second stream using the same API as the first stream
       // Use tool_choice: "none" to ensure the model responds with text instead of calling tools again
-      const secondStream = await openai.chat.completions.create({
-        model,
-        messages,
-        stream: true,
-        tools: tools,
-        tool_choice: "none",
-      });
+      let secondStream;
 
-      let secondStreamChunkCount = 0;
-      for await (const chunk of secondStream) {
-        secondStreamChunkCount++;
-        if (secondStreamChunkCount === 1) {
-          console.log("[STREAM] First chunk received from second stream");
+      try {
+        if (useResponsesApi) {
+          // For responses API, need to convert messages back to input format
+          // For simplicity in tool result handling, we'll use chat completions API
+          // which supports tool results natively
+          console.log(
+            "[STREAM] Using chat completions API for second stream (tool results)",
+          );
+          // Filter out web_search tools for chat completions
+          const chatTools = tools.filter((t) => t.type !== "web_search");
+          secondStream = await openai.chat.completions.create({
+            model,
+            messages,
+            stream: true,
+            tools: chatTools.length > 0 ? chatTools : undefined,
+            tool_choice: "none",
+          });
+        } else {
+          // Standard chat completions API
+          secondStream = await openai.chat.completions.create({
+            model,
+            messages,
+            stream: true,
+            tools: tools,
+            tool_choice: "none",
+          });
         }
-        // Check if stream was aborted
-        if (isAborted || abortController.signal.aborted) {
-          console.log("[STREAM] Second stream aborted by user");
-          finishReason = "stopped";
-          break;
+
+        let secondStreamChunkCount = 0;
+        for await (const chunk of secondStream) {
+          secondStreamChunkCount++;
+          if (secondStreamChunkCount === 1) {
+            console.log("[STREAM] First chunk received from second stream");
+          }
+          // Check if stream was aborted
+          if (isAborted || abortController.signal.aborted) {
+            console.log("[STREAM] Second stream aborted by user");
+            finishReason = "stopped";
+            break;
+          }
+          await processChunk(chunk);
         }
-        await processChunk(chunk);
+        console.log(
+          "[STREAM] Second stream completed. Chunks received:",
+          secondStreamChunkCount,
+        );
+        console.log(
+          "[STREAM] Full response length after second stream:",
+          fullResponse.length,
+        );
+      } catch (secondStreamError) {
+        console.error("[STREAM] ❌ Error in second stream:", secondStreamError);
+        // Send error to client but continue with response
+        res.write(
+          `data: ${JSON.stringify({
+            type: "error",
+            message:
+              "Failed to generate follow-up response after tool execution",
+            error: secondStreamError.message,
+            timestamp: new Date().toISOString(),
+          })}\n\n`,
+        );
+        if (typeof res.flush === "function") res.flush();
       }
-      console.log(
-        "[STREAM] Second stream completed. Chunks received:",
-        secondStreamChunkCount,
-      );
-      console.log(
-        "[STREAM] Full response length after second stream:",
-        fullResponse.length,
-      );
     }
 
     // Upload files to Cloudinary BEFORE sending done event so URLs can be included
