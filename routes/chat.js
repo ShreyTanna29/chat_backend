@@ -917,6 +917,7 @@ You can use web_search for current info, generate_image for visuals, and create_
     }
 
     let toolCalls = [];
+    let functionCallIdToIndex = {}; // Map Responses API function_call IDs to toolCalls indices
     let generatedImages = [];
     let processedImageHashes = new Set(); // Track processed images to prevent duplicates
     let citations = []; // Track web search citations/sources
@@ -1389,10 +1390,82 @@ You can use web_search for current info, generate_image for visuals, and create_
           }
         }
       } else if (
-        chunk.type === "response.output_item.done" &&
+        (chunk.type === "response.output_item.added" ||
+          chunk.type === "response.output_item.done") &&
         chunk.item?.type === "function_call"
       ) {
-        // Handle tool calls if they appear here (future proofing)
+        // Handle custom function tools (like create_reminder) when using the Responses API
+        const item = chunk.item;
+        const callId =
+          item.id ||
+          item.call_id ||
+          item.name ||
+          `function_call_${toolCalls.length}`;
+
+        let idx = functionCallIdToIndex[callId];
+        if (idx === undefined) {
+          idx = toolCalls.length;
+          functionCallIdToIndex[callId] = idx;
+          toolCalls[idx] = {
+            id: callId,
+            type: "function",
+            function: {
+              name: item.name || "",
+              arguments: "",
+            },
+          };
+        } else {
+          // Make sure we capture the function name if it arrives later
+          if (item.name && !toolCalls[idx].function.name) {
+            toolCalls[idx].function.name = item.name;
+          }
+        }
+
+        // Some providers may include full arguments on the function_call item itself
+        if (item.arguments && !toolCalls[idx].function.arguments) {
+          toolCalls[idx].function.arguments = item.arguments;
+        }
+      } else if (chunk.type === "response.function_call_arguments.delta") {
+        // Accumulate streamed function-call arguments from the Responses API
+        const id = chunk.item_id || chunk.call_id;
+        let idx =
+          id && functionCallIdToIndex[id] !== undefined
+            ? functionCallIdToIndex[id]
+            : toolCalls.length - 1;
+
+        // Create a placeholder entry if we somehow see arguments before the function_call item
+        if (idx < 0) {
+          idx = toolCalls.length;
+          const placeholderId = id || `function_call_${idx}`;
+          functionCallIdToIndex[placeholderId] = idx;
+          toolCalls[idx] = {
+            id: placeholderId,
+            type: "function",
+            function: { name: "", arguments: "" },
+          };
+        }
+
+        if (!toolCalls[idx].function.arguments) {
+          toolCalls[idx].function.arguments = "";
+        }
+        if (typeof chunk.delta === "string") {
+          toolCalls[idx].function.arguments += chunk.delta;
+        }
+      } else if (chunk.type === "response.function_call_arguments.done") {
+        // Finalize function-call arguments and mark that the stream ended with tool calls
+        const id = chunk.item_id || chunk.call_id;
+        let idx =
+          id && functionCallIdToIndex[id] !== undefined
+            ? functionCallIdToIndex[id]
+            : toolCalls.length - 1;
+
+        if (idx >= 0 && chunk.arguments && typeof chunk.arguments === "string") {
+          toolCalls[idx].function.arguments = chunk.arguments;
+        }
+
+        // Signal to the outer loop that we should execute tools after the stream
+        streamEndedWithToolCalls = true;
+        finishReason = "tool_calls";
       } else if (
         chunk.type === "response.image_generation.done" ||
         chunk.type === "response.image_generation_call.done"
