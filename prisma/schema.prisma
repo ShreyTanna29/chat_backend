@@ -32,7 +32,8 @@ model User {
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
   conversations        Conversation[]
-  spaces               Space[]
+  spaces               Space[] // Spaces owned by user
+  spaceMemberships     SpaceMember[] // Spaces where user is a member
   sharedConversations  SharedConversation[]
   reminders            Reminder[]
   sessions             Session[]
@@ -78,12 +79,30 @@ model Space {
   name          String
   defaultPrompt String?        @db.Text
   conversations Conversation[]
+  members       SpaceMember[] // Users who are members of this space
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
   @@unique([userId, name])
   @@index([userId])
   @@map("spaces")
+}
+
+/// SpaceMember: Junction table for many-to-many relationship between Users and Spaces
+model SpaceMember {
+  id      String   @id @default(cuid())
+  spaceId String
+  space   Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId  String
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role    String   @default("member") // "owner", "admin", or "member"
+  addedAt DateTime @default(now())
+  addedBy String? // UserId of who added this member
+
+  @@unique([spaceId, userId]) // A user can only be added once to a space
+  @@index([spaceId])
+  @@index([userId])
+  @@map("space_members")
 }
 
 /// SharedConversation: Stores share links for public conversation access

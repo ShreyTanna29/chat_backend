@@ -803,4 +803,35 @@ router.delete("/push-token", auth, async (req, res) => {
   }
 });
 
+/**
+ * Search for users by email or name
+ * @route   GET /api/auth/users/search
+ * @access  Private
+ */
+router.get("/users/search", auth, async (req, res) => {
+  try {
+    const { q, limit = 10 } = req.query;
+
+    if (!q || q.trim().length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: "Search query must be at least 2 characters",
+      });
+    }
+
+    const users = await User.search(q.trim(), parseInt(limit));
+
+    res.status(200).json({
+      success: true,
+      data: users,
+    });
+  } catch (error) {
+    console.error("Search users error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to search users",
+    });
+  }
+});
+
 module.exports = router;

@@ -236,6 +236,35 @@ class User {
   static async count() {
     return await prisma.user.count();
   }
+
+  // Search users by email or name
+  static async search(query, limit = 10) {
+    return await prisma.user.findMany({
+      where: {
+        OR: [
+          {
+            email: {
+              contains: query,
+              mode: "insensitive",
+            },
+          },
+          {
+            name: {
+              contains: query,
+              mode: "insensitive",
+            },
+          },
+        ],
+      },
+      take: limit,
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        avatar: true,
+      },
+    });
+  }
 }
 
 module.exports = User;

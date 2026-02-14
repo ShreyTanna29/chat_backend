@@ -1414,7 +1414,10 @@ You can use web_search for current info, generate_image for visuals, and create_
         // Handle custom function tools (like create_reminder) when using the Responses API
         const item = chunk.item;
         const rawCallId =
-          item.id || item.call_id || item.name || `function_call_${toolCalls.length}`;
+          item.id ||
+          item.call_id ||
+          item.name ||
+          `function_call_${toolCalls.length}`;
         const callId = normalizeToolCallId(rawCallId, toolCalls.length);
 
         let idx = functionCallIdToIndex[callId];
@@ -1477,7 +1480,11 @@ You can use web_search for current info, generate_image for visuals, and create_
             ? functionCallIdToIndex[id]
             : toolCalls.length - 1;
 
-        if (idx >= 0 && chunk.arguments && typeof chunk.arguments === "string") {
+        if (
+          idx >= 0 &&
+          chunk.arguments &&
+          typeof chunk.arguments === "string"
+        ) {
           toolCalls[idx].function.arguments = chunk.arguments;
         }
 
@@ -1553,8 +1560,7 @@ You can use web_search for current info, generate_image for visuals, and create_
               function: { name: "", arguments: "" },
             };
           }
-          if (tc.id)
-            toolCalls[idx].id = normalizeToolCallId(tc.id, idx);
+          if (tc.id) toolCalls[idx].id = normalizeToolCallId(tc.id, idx);
           if (tc.type) toolCalls[idx].type = tc.type;
           if (tc.function?.name)
             toolCalls[idx].function.name += tc.function.name;
@@ -3016,12 +3022,12 @@ router.get("/conversations/search", auth, async (req, res) => {
 // ============================================
 
 // @route   GET /api/chat/spaces
-// @desc    List spaces for the authenticated user
+// @desc    List spaces for the authenticated user (owned and member spaces)
 // @access  Private
 router.get("/spaces", auth, async (req, res) => {
   try {
     const { page = 1, limit = 20 } = req.query;
-    const result = await Space.findByUserId(req.user.id, { page, limit });
+    const result = await Space.findAllUserSpaces(req.user.id, { page, limit });
     res.json({ success: true, data: result });
   } catch (error) {
     console.error("Get spaces error:", error);
@@ -3069,7 +3075,7 @@ router.post("/spaces", auth, async (req, res) => {
 
 // @route   GET /api/chat/spaces/:id
 // @desc    Get a specific space
-// @access  Private
+// @access  Private (members only)
 router.get("/spaces/:id", auth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -3078,9 +3084,13 @@ router.get("/spaces/:id", auth, async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "Space not found" });
-    if (space.userId !== req.user.id)
+
+    // Check if user has access (owner or member)
+    const access = await Space.isMember({ spaceId: id, userId: req.user.id });
+    if (!access.isMember)
       return res.status(403).json({ success: false, message: "Access denied" });
-    res.json({ success: true, data: space });
+
+    res.json({ success: true, data: { ...space, userRole: access.role } });
   } catch (error) {
     console.error("Get space error:", error);
     res.status(500).json({
@@ -3093,7 +3103,7 @@ router.get("/spaces/:id", auth, async (req, res) => {
 
 // @route   PUT /api/chat/spaces/:id
 // @desc    Update space
-// @access  Private
+// @access  Private (owner or admin only)
 router.put("/spaces/:id", auth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -3103,7 +3113,13 @@ router.put("/spaces/:id", auth, async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "Space not found" });
-    if (space.userId !== req.user.id)
+
+    // Check if user has admin access
+    const access = await Space.isMember({ spaceId: id, userId: req.user.id });
+    if (
+      !access.isMember ||
+      (access.role !== "owner" && access.role !== "admin")
+    )
       return res.status(403).json({ success: false, message: "Access denied" });
 
     const updated = await Space.update(id, { name, defaultPrompt });
@@ -3156,7 +3172,10 @@ router.get("/spaces/:id/conversations", auth, async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "Space not found" });
-    if (space.userId !== req.user.id)
+
+    // Check if user has access (owner or member)
+    const access = await Space.isMember({ spaceId: id, userId: req.user.id });
+    if (!access.isMember)
       return res.status(403).json({ success: false, message: "Access denied" });
 
     const result = await Space.listConversations(id, { page, limit });
@@ -3166,6 +3185,222 @@ router.get("/spaces/:id/conversations", auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to list conversations",
+      error: error.message,
+    });
+  }
+});
+
+// @route   POST /api/chat/spaces/:id/members
+// @desc    Add a member to a space
+// @access  Private (owner or admin only)
+router.post("/spaces/:id/members", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId, role = "member" } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "userId is required",
+      });
+    }
+
+    // Check if space exists
+    const space = await Space.findById(id);
+    if (!space) {
+      return res.status(404).json({
+        success: false,
+        message: "Space not found",
+      });
+    }
+
+    // Check if requester has permission (owner or admin)
+    const requesterAccess = await Space.isMember({
+      spaceId: id,
+      userId: req.user.id,
+    });
+
+    if (
+      !requesterAccess.isMember ||
+      (requesterAccess.role !== "owner" && requesterAccess.role !== "admin")
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Only space owners and admins can add members",
+      });
+    }
+
+    // Add the member
+    const member = await Space.addMember({
+      spaceId: id,
+      userId,
+      addedBy: req.user.id,
+      role,
+    });
+
+    res.status(201).json({ success: true, data: member });
+  } catch (error) {
+    console.error("Add space member error:", error);
+    if (error.message === "User is already a member of this space") {
+      return res.status(409).json({
+        success: false,
+        message: error.message,
+      });
+    }
+    res.status(500).json({
+      success: false,
+      message: "Failed to add member",
+      error: error.message,
+    });
+  }
+});
+
+// @route   GET /api/chat/spaces/:id/members
+// @desc    List all members of a space
+// @access  Private (members only)
+router.get("/spaces/:id/members", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check if space exists
+    const space = await Space.findById(id);
+    if (!space) {
+      return res.status(404).json({
+        success: false,
+        message: "Space not found",
+      });
+    }
+
+    // Check if user has access
+    const access = await Space.isMember({ spaceId: id, userId: req.user.id });
+    if (!access.isMember) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied",
+      });
+    }
+
+    const members = await Space.listMembers(id);
+    res.json({ success: true, data: members });
+  } catch (error) {
+    console.error("List space members error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to list members",
+      error: error.message,
+    });
+  }
+});
+
+// @route   DELETE /api/chat/spaces/:id/members/:userId
+// @desc    Remove a member from a space
+// @access  Private (owner, admin, or the user themselves)
+router.delete("/spaces/:id/members/:userId", auth, async (req, res) => {
+  try {
+    const { id, userId } = req.params;
+
+    // Check if space exists
+    const space = await Space.findById(id);
+    if (!space) {
+      return res.status(404).json({
+        success: false,
+        message: "Space not found",
+      });
+    }
+
+    // Check permissions
+    const requesterAccess = await Space.isMember({
+      spaceId: id,
+      userId: req.user.id,
+    });
+
+    const canRemove =
+      requesterAccess.role === "owner" ||
+      requesterAccess.role === "admin" ||
+      req.user.id === userId; // Users can remove themselves
+
+    if (!canRemove) {
+      return res.status(403).json({
+        success: false,
+        message: "You don't have permission to remove this member",
+      });
+    }
+
+    await Space.removeMember({ spaceId: id, userId });
+    res.json({ success: true, message: "Member removed successfully" });
+  } catch (error) {
+    console.error("Remove space member error:", error);
+    if (error.message === "Cannot remove the space owner") {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+    res.status(500).json({
+      success: false,
+      message: "Failed to remove member",
+      error: error.message,
+    });
+  }
+});
+
+// @route   PATCH /api/chat/spaces/:id/members/:userId
+// @desc    Update a member's role
+// @access  Private (owner only)
+router.patch("/spaces/:id/members/:userId", auth, async (req, res) => {
+  try {
+    const { id, userId } = req.params;
+    const { role } = req.body;
+
+    if (!role) {
+      return res.status(400).json({
+        success: false,
+        message: "role is required",
+      });
+    }
+
+    if (!["member", "admin"].includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: "role must be 'member' or 'admin'",
+      });
+    }
+
+    // Check if space exists
+    const space = await Space.findById(id);
+    if (!space) {
+      return res.status(404).json({
+        success: false,
+        message: "Space not found",
+      });
+    }
+
+    // Only owners can update roles
+    if (space.userId !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Only the space owner can update member roles",
+      });
+    }
+
+    const updated = await Space.updateMemberRole({
+      spaceId: id,
+      userId,
+      role,
+    });
+
+    res.json({ success: true, data: updated });
+  } catch (error) {
+    console.error("Update member role error:", error);
+    if (error.message === "Cannot change the role of the space owner") {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+    res.status(500).json({
+      success: false,
+      message: "Failed to update member role",
       error: error.message,
     });
   }
