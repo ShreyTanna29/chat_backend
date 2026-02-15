@@ -497,17 +497,32 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     }
 
     // Validate space access
-    if (spaceId && (!space || space.userId !== req.user.id)) {
-      console.log("[STREAM] ❌ Space not found or access denied:", spaceId);
-      cleanupStream();
-      res.write(
-        `data: ${JSON.stringify({
-          type: "error",
-          message: "Access denied to space",
-        })}\n\n`,
-      );
-      res.end();
-      return;
+    if (spaceId) {
+      if (!space) {
+        console.log("[STREAM] ❌ Space not found:", spaceId);
+        cleanupStream();
+        res.write(
+          `data: ${JSON.stringify({
+            type: "error",
+            message: "Space not found",
+          })}\n\n`,
+        );
+        res.end();
+        return;
+      }
+      const access = await Space.isMember({ spaceId, userId: req.user.id });
+      if (!access.isMember) {
+        console.log("[STREAM] ❌ Access denied to space:", spaceId);
+        cleanupStream();
+        res.write(
+          `data: ${JSON.stringify({
+            type: "error",
+            message: "Access denied to space",
+          })}\n\n`,
+        );
+        res.end();
+        return;
+      }
     }
 
     timings.database = Date.now() - dbStartTime;
@@ -2328,7 +2343,13 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
     let space = null;
     if (spaceId) {
       space = await Space.findById(spaceId);
-      if (!space || space.userId !== req.user.id) {
+      if (!space) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Space not found" });
+      }
+      const access = await Space.isMember({ spaceId, userId: req.user.id });
+      if (!access.isMember) {
         return res
           .status(403)
           .json({ success: false, message: "Access denied to space" });
@@ -2470,7 +2491,13 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
     let space = null;
     if (spaceId) {
       space = await Space.findById(spaceId);
-      if (!space || space.userId !== req.user.id) {
+      if (!space) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Space not found" });
+      }
+      const access = await Space.isMember({ spaceId, userId: req.user.id });
+      if (!access.isMember) {
         return res
           .status(403)
           .json({ success: false, message: "Access denied to space" });
