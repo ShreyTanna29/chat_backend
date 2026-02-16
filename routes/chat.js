@@ -2815,13 +2815,13 @@ router.post("/voice", auth, upload.single("audio"), async (req, res) => {
 // ============================================
 
 // @route   GET /api/chat/conversations
-// @desc    Get all conversations for the authenticated user
+// @desc    Get all conversations for the authenticated user (owned + in member spaces)
 // @access  Private
 router.get("/conversations", auth, async (req, res) => {
   try {
     const { page = 1, limit = 20 } = req.query;
 
-    const result = await Conversation.findByUserId(req.user.id, {
+    const result = await Conversation.findAllAccessibleByUserId(req.user.id, {
       page,
       limit,
       includeMessages: false, // Only include first message for preview
@@ -2857,8 +2857,18 @@ router.get("/conversations/:id", auth, async (req, res) => {
       });
     }
 
-    // Verify ownership
-    if (conversation.userId !== req.user.id) {
+    // Verify access - allow if user owns the conversation OR is a member of the space
+    let hasAccess = conversation.userId === req.user.id;
+
+    if (!hasAccess && conversation.spaceId) {
+      const access = await Space.isMember({
+        spaceId: conversation.spaceId,
+        userId: req.user.id,
+      });
+      hasAccess = access.isMember;
+    }
+
+    if (!hasAccess) {
       return res.status(403).json({
         success: false,
         message: "Access denied",
@@ -2924,8 +2934,18 @@ router.put("/conversations/:id", auth, async (req, res) => {
       });
     }
 
-    // Verify ownership
-    if (conversation.userId !== req.user.id) {
+    // Verify access - allow if user owns the conversation OR is a member of the space
+    let hasAccess = conversation.userId === req.user.id;
+
+    if (!hasAccess && conversation.spaceId) {
+      const access = await Space.isMember({
+        spaceId: conversation.spaceId,
+        userId: req.user.id,
+      });
+      hasAccess = access.isMember;
+    }
+
+    if (!hasAccess) {
       return res.status(403).json({
         success: false,
         message: "Access denied",
@@ -2966,8 +2986,18 @@ router.delete("/conversations/:id", auth, async (req, res) => {
       });
     }
 
-    // Verify ownership
-    if (conversation.userId !== req.user.id) {
+    // Verify access - allow if user owns the conversation OR is a member of the space
+    let hasAccess = conversation.userId === req.user.id;
+
+    if (!hasAccess && conversation.spaceId) {
+      const access = await Space.isMember({
+        spaceId: conversation.spaceId,
+        userId: req.user.id,
+      });
+      hasAccess = access.isMember;
+    }
+
+    if (!hasAccess) {
       return res.status(403).json({
         success: false,
         message: "Access denied",

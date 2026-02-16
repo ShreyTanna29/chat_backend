@@ -297,7 +297,7 @@ class Conversation {
 
     // Find first user message
     const firstUserMessage = conversation.messages.find(
-      (m) => m.role === "user"
+      (m) => m.role === "user",
     );
 
     if (!firstUserMessage) {
@@ -307,6 +307,92 @@ class Conversation {
     const title = this.generateTitle(firstUserMessage.content);
 
     return await this.update(conversationId, { title });
+  }
+
+  /**
+   * Get all conversations accessible by user (owned + in member spaces)
+   * @param {string} userId - User ID
+   * @param {Object} options - Query options
+   * @returns {Promise<Object>} List of conversations with pagination
+   */
+  static async findAllAccessibleByUserId(userId, options = {}) {
+    const {
+      page = 1,
+      limit = 20,
+      includeMessages = false,
+      orderBy = "updatedAt",
+      orderDir = "desc",
+    } = options;
+
+    const skip = (page - 1) * limit;
+
+    // Get space IDs where user is a member
+    const spaceMemberships = await prisma.spaceMember.findMany({
+      where: { userId },
+      select: { spaceId: true },
+    });
+    const memberSpaceIds = spaceMemberships.map((sm) => sm.spaceId);
+
+    // Query for conversations where user is owner OR conversation is in a member space
+    const [conversations, total] = await Promise.all([
+      prisma.conversation.findMany({
+        where: {
+          OR: [
+            { userId }, // User owns the conversation
+            { spaceId: { in: memberSpaceIds } }, // Conversation in a space where user is member
+          ],
+        },
+        skip,
+        take: parseInt(limit),
+        orderBy: {
+          [orderBy]: orderDir,
+        },
+        include: {
+          messages: includeMessages
+            ? {
+                orderBy: {
+                  createdAt: "asc",
+                },
+              }
+            : {
+                take: 1,
+                orderBy: {
+                  createdAt: "asc",
+                },
+                select: {
+                  content: true,
+                  createdAt: true,
+                },
+              },
+          _count: {
+            select: {
+              messages: true,
+            },
+          },
+          space: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      }),
+      prisma.conversation.count({
+        where: {
+          OR: [{ userId }, { spaceId: { in: memberSpaceIds } }],
+        },
+      }),
+    ]);
+
+    return {
+      conversations,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit),
+      },
+    };
   }
 }
 
