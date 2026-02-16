@@ -477,14 +477,8 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
     }
 
     // Validate conversation access
-    if (
-      conversationId &&
-      (!conversation || conversation.userId !== req.user.id)
-    ) {
-      console.log(
-        "[STREAM] ❌ Conversation not found or access denied:",
-        conversationId,
-      );
+    if (conversationId && !conversation) {
+      console.log("[STREAM] ❌ Conversation not found:", conversationId);
       cleanupStream();
       res.write(
         `data: ${JSON.stringify({
@@ -494,6 +488,35 @@ router.post("/stream", auth, uploadFields, async (req, res) => {
       );
       res.end();
       return;
+    }
+
+    // Verify access - allow if user owns the conversation OR is a member of the space
+    if (conversationId) {
+      let hasAccess = conversation.userId === req.user.id;
+
+      if (!hasAccess && conversation.spaceId) {
+        const access = await Space.isMember({
+          spaceId: conversation.spaceId,
+          userId: req.user.id,
+        });
+        hasAccess = access.isMember;
+      }
+
+      if (!hasAccess) {
+        console.log(
+          "[STREAM] ❌ Access denied to conversation:",
+          conversationId,
+        );
+        cleanupStream();
+        res.write(
+          `data: ${JSON.stringify({
+            type: "error",
+            message: "Access denied",
+          })}\n\n`,
+        );
+        res.end();
+        return;
+      }
     }
 
     // Validate space access
@@ -2362,10 +2385,28 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
       conversation = await Conversation.findById(conversationId, {
         includeMessages: true,
       });
-      if (!conversation || conversation.userId !== req.user.id) {
+      if (!conversation) {
         return res.status(404).json({
           success: false,
           message: "Conversation not found",
+        });
+      }
+
+      // Verify access - allow if user owns the conversation OR is a member of the space
+      let hasAccess = conversation.userId === req.user.id;
+
+      if (!hasAccess && conversation.spaceId) {
+        const access = await Space.isMember({
+          spaceId: conversation.spaceId,
+          userId: req.user.id,
+        });
+        hasAccess = access.isMember;
+      }
+
+      if (!hasAccess) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied",
         });
       }
     } else {
@@ -2510,10 +2551,28 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
       conversation = await Conversation.findById(conversationId, {
         includeMessages: true,
       });
-      if (!conversation || conversation.userId !== req.user.id) {
+      if (!conversation) {
         return res.status(404).json({
           success: false,
           message: "Conversation not found",
+        });
+      }
+
+      // Verify access - allow if user owns the conversation OR is a member of the space
+      let hasAccess = conversation.userId === req.user.id;
+
+      if (!hasAccess && conversation.spaceId) {
+        const access = await Space.isMember({
+          spaceId: conversation.spaceId,
+          userId: req.user.id,
+        });
+        hasAccess = access.isMember;
+      }
+
+      if (!hasAccess) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied",
         });
       }
     } else {
