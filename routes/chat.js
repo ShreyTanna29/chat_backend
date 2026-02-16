@@ -2165,6 +2165,8 @@ You can use web_search for current info, generate_image for visuals, and create_
           role: "user",
           content: userMessageContent, // Store original prompt, not the full AI message with doc content
           metadata: {
+            userId: req.user.id,
+            userName: req.user.name,
             hasImage: !!imageFile,
             imageType: imageFile?.mimetype,
             imageUrl,
@@ -2465,7 +2467,10 @@ router.post("/simple", auth, chatValidation, async (req, res) => {
       await Conversation.addMessage(conversation.id, {
         role: "user",
         content: prompt,
-        metadata: {},
+        metadata: {
+          userId: req.user.id,
+          userName: req.user.name,
+        },
       });
 
       await Conversation.addMessage(conversation.id, {
@@ -2667,6 +2672,8 @@ router.post("/ask", auth, upload.single("image"), async (req, res) => {
         role: "user",
         content: userMessageContent,
         metadata: {
+          userId: req.user.id,
+          userName: req.user.name,
           hasImage: !!imageFile,
           imageType: imageFile?.mimetype,
           imageUrl,
