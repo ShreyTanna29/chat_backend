@@ -98,7 +98,7 @@ Generate complete, production-ready React code. Each file should be self-contain
     try {
       // Create streaming completion
       const stream = await openai.chat.completions.create({
-        model: "gpt-5.2-codex",
+        model: "gpt-5.2-2025-12-11",
         messages: [
           {
             role: "system",
@@ -283,7 +283,7 @@ Only include files that were modified. Unchanged files can be omitted.`;
 
     try {
       const stream = await openai.chat.completions.create({
-        model: "gpt-5.2-codex",
+        model: "gpt-5.2-2025-12-11",
         messages: [
           {
             role: "system",
