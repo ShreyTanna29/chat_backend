@@ -97,21 +97,15 @@ Generate complete, production-ready React code. Each file should be self-contain
 
     try {
       // Create streaming completion
+      const fullPrompt = `${systemPrompt}\n\n---\n\nProject: ${projectName}\n\nRequirement: ${prompt}\n\nGenerate the complete React application with all necessary files.`;
+
       const stream = await openai.completions.create({
         model: "gpt-5.2-codex",
-        messages: [
-          {
-            role: "system",
-            content: systemPrompt,
-          },
-          {
-            role: "user",
-            content: `Project: ${projectName}\n\nRequirement: ${prompt}\n\nGenerate the complete React application with all necessary files.`,
-          },
-        ],
+        prompt: fullPrompt,
         stream: true,
         temperature: 0.7,
         max_tokens: 4000,
+        suffix: "",
       });
 
       // Track accumulated response
@@ -119,7 +113,7 @@ Generate complete, production-ready React code. Each file should be self-contain
 
       // Stream the response
       for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content || "";
+        const content = chunk.choices[0]?.text || "";
 
         if (content) {
           fullResponse += content;
@@ -282,27 +276,21 @@ Output files in this exact format:
 Only include files that were modified. Unchanged files can be omitted.`;
 
     try {
-      const stream = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: systemPrompt,
-          },
-          {
-            role: "user",
-            content: `${currentCode}\n\nUser feedback: ${feedback}\n\nPlease update the code based on this feedback.`,
-          },
-        ],
+      const fullPrompt = `${systemPrompt}\n\n---\n\n${currentCode}\n\nUser feedback: ${feedback}\n\nPlease update the code based on this feedback.`;
+
+      const stream = await openai.completions.create({
+        model: "gpt-5.2-codex",
+        prompt: fullPrompt,
         stream: true,
         temperature: 0.7,
         max_tokens: 4000,
+        suffix: "",
       });
 
       let fullResponse = "";
 
       for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content || "";
+        const content = chunk.choices[0]?.text || "";
 
         if (content) {
           fullResponse += content;
