@@ -49,6 +49,7 @@ app.use("/api/auth", require("./routes/auth"));
 app.use("/api/chat", require("./routes/chat"));
 app.use("/api/discover", require("./routes/discover"));
 app.use("/api/reminders", require("./routes/reminders"));
+app.use("/api/codebuilder", require("./routes/codebuilder"));
 
 // Initialize discover cron job
 require("./routes/discover").initDiscoverCron();
@@ -59,7 +60,7 @@ const {
   stopAllReminders,
 } = require("./utils/reminderScheduler");
 initializeScheduler().catch((err) =>
-  console.error("Failed to initialize reminder scheduler:", err)
+  console.error("Failed to initialize reminder scheduler:", err),
 );
 
 // Health check route
@@ -83,7 +84,7 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   console.log(
-    `WebSocket voice chat available at ws://localhost:${PORT}/api/chat/voice-realtime`
+    `WebSocket voice chat available at ws://localhost:${PORT}/api/chat/voice-realtime`,
   );
 });
 
