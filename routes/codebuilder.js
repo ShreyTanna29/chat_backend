@@ -110,8 +110,6 @@ Generate complete, production-ready React code. Each file should be self-contain
           },
         ],
         stream: true,
-        temperature: 0.7,
-        max_tokens: 4000,
       });
 
       // Track accumulated response
@@ -295,8 +293,6 @@ Only include files that were modified. Unchanged files can be omitted.`;
           },
         ],
         stream: true,
-        temperature: 0.7,
-        max_tokens: 4000,
       });
 
       let fullResponse = "";
