@@ -49,7 +49,7 @@ router.post(
     res.setHeader("Connection", "keep-alive");
 
     // System prompt for React code generation
-    const systemPrompt = `You are an expert React developer. Generate clean, modern React code following best practices.
+    const systemPrompt = `You are an expert React developer. Generate clean, modern React code following best practices. The site should be stunning, beautiful, responsive and user-friendly.
 
 IMPORTANT RULES:
 1. Only generate React code (JavaScript/JSX)
@@ -98,7 +98,7 @@ Generate complete, production-ready React code. Each file should be self-contain
     try {
       // Create streaming completion
       const stream = await openai.chat.completions.create({
-        model: "gpt-4o", // Using GPT-4 for better code generation
+        model: "gpt-5.2-codex",
         messages: [
           {
             role: "system",
