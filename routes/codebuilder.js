@@ -97,7 +97,7 @@ Generate complete, production-ready React code. Each file should be self-contain
 
     try {
       // Create streaming completion
-      const stream = await openai.chat.completions.create({
+      const stream = await openai.completions.create({
         model: "gpt-5.2-codex",
         messages: [
           {
