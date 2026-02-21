@@ -13,7 +13,17 @@ const server = http.createServer(app);
 
 // Middleware
 app.use(cors());
-app.use(express.json({ limit: "50mb" }));
+
+// Conditionally apply express.json() - skip for multipart/form-data
+app.use((req, res, next) => {
+  const contentType = req.headers["content-type"] || "";
+  if (contentType.includes("multipart/form-data")) {
+    // Skip JSON parsing for multipart requests (handled by multer)
+    return next();
+  }
+  express.json({ limit: "50mb" })(req, res, next);
+});
+
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 // Database connection
