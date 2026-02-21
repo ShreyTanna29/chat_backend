@@ -279,12 +279,21 @@ router.post(
   upload.single("image"), // Accept single image file
   [
     body("files")
-      .isArray()
-      .withMessage("Files must be an array")
       .notEmpty()
-      .withMessage("At least one file is required"),
-    body("files.*.path").notEmpty().withMessage("File path is required"),
-    body("files.*.content").notEmpty().withMessage("File content is required"),
+      .withMessage("Files are required")
+      .custom((value) => {
+        // Accept either array (JSON) or string (multipart form data)
+        if (typeof value === "string") {
+          try {
+            const parsed = JSON.parse(value);
+            return Array.isArray(parsed) && parsed.length > 0;
+          } catch {
+            return false;
+          }
+        }
+        return Array.isArray(value) && value.length > 0;
+      })
+      .withMessage("Files must be a valid non-empty array"),
     body("feedback")
       .notEmpty()
       .trim()
