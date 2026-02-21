@@ -2,6 +2,7 @@ const express = require("express");
 const OpenAI = require("openai");
 const auth = require("../middleware/auth");
 const { body, validationResult } = require("express-validator");
+const multer = require("multer");
 
 const router = express.Router();
 
@@ -9,16 +10,33 @@ const router = express.Router();
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   maxRetries: 2,
-  timeout: 120000, // 2 minutes for code generation
+});
+
+// Set up multer for image uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB max file size for images
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept only images
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed"), false);
+    }
+  },
 });
 
 /**
  * POST /api/codebuilder/generate
  * Stream React code from OpenAI in a structured file format
+ * Accepts optional image/mockup for visual reference
  */
 router.post(
   "/generate",
   auth,
+  upload.single("image"), // Accept single image file
   [
     body("prompt")
       .notEmpty()
@@ -39,9 +57,17 @@ router.post(
     }
 
     const { prompt, projectName = "react-app" } = req.body;
+    const imageFile = req.file || null; // Get uploaded image
     const userId = req.user.id;
 
     console.log(`[CODEBUILDER] User ${userId} requesting: ${prompt}`);
+    if (imageFile) {
+      console.log(`[CODEBUILDER] Image provided:`, {
+        mimetype: imageFile.mimetype,
+        size: imageFile.size,
+        originalname: imageFile.originalname,
+      });
+    }
 
     // Set headers for streaming
     res.setHeader("Content-Type", "text/event-stream");
@@ -58,6 +84,8 @@ IMPORTANT RULES:
 4. Include proper imports and exports
 5. Write clean, well-commented code
 6. Use proper file structure
+7. If an image/mockup is provided, analyze it carefully and recreate the UI as accurately as possible
+8. Match colors, layouts, typography, and spacing from any provided design images
 
 FILE FORMAT:
 Output files in this exact format:
@@ -96,6 +124,29 @@ export default App;
 Generate complete, production-ready React code. Each file should be self-contained and properly structured.`;
 
     try {
+      // Build user message content
+      const userMessageContent = [];
+
+      // Add text prompt
+      userMessageContent.push({
+        type: "text",
+        text: `Project: ${projectName}\n\nRequirement: ${prompt}\n\nGenerate the complete React application with all necessary files.`,
+      });
+
+      // Add image if provided
+      if (imageFile) {
+        console.log("[CODEBUILDER] Encoding image to base64...");
+        const base64Image = imageFile.buffer.toString("base64");
+        userMessageContent.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${imageFile.mimetype};base64,${base64Image}`,
+            detail: "high", // Use high detail for better UI analysis
+          },
+        });
+        console.log("[CODEBUILDER] ✓ Image added to request");
+      }
+
       // Create streaming completion
       const stream = await openai.chat.completions.create({
         model: "gpt-5.2-2025-12-11",
@@ -106,7 +157,7 @@ Generate complete, production-ready React code. Each file should be self-contain
           },
           {
             role: "user",
-            content: `Project: ${projectName}\n\nRequirement: ${prompt}\n\nGenerate the complete React application with all necessary files.`,
+            content: userMessageContent,
           },
         ],
         stream: true,
@@ -220,10 +271,12 @@ function getFileType(filePath) {
 /**
  * POST /api/codebuilder/refine
  * Refine existing code based on user feedback
+ * Accepts optional image for visual reference
  */
 router.post(
   "/refine",
   auth,
+  upload.single("image"), // Accept single image file
   [
     body("files")
       .isArray()
@@ -245,10 +298,32 @@ router.post(
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
-    const { files, feedback } = req.body;
+    // Parse files if it's a JSON string (from multipart form data)
+    let files;
+    try {
+      files =
+        typeof req.body.files === "string"
+          ? JSON.parse(req.body.files)
+          : req.body.files;
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid files format. Must be a valid JSON array.",
+      });
+    }
+
+    const { feedback } = req.body;
+    const imageFile = req.file || null; // Get uploaded image
     const userId = req.user.id;
 
     console.log(`[CODEBUILDER] User ${userId} refining ${files.length} files`);
+    if (imageFile) {
+      console.log(`[CODEBUILDER] Image provided for refinement:`, {
+        mimetype: imageFile.mimetype,
+        size: imageFile.size,
+        originalname: imageFile.originalname,
+      });
+    }
 
     // Set headers for streaming
     res.setHeader("Content-Type", "text/event-stream");
@@ -269,6 +344,8 @@ IMPORTANT RULES:
 3. Follow modern React patterns and best practices
 4. Keep imports and exports consistent
 5. Apply the requested changes while preserving working functionality
+6. If an image/mockup is provided, use it as reference for visual changes
+7. Match colors, layouts, typography, and spacing from any provided design images
 
 FILE FORMAT:
 Output files in this exact format:
@@ -280,6 +357,29 @@ Output files in this exact format:
 Only include files that were modified. Unchanged files can be omitted.`;
 
     try {
+      // Build user message content
+      const userMessageContent = [];
+
+      // Add current code and feedback as text
+      userMessageContent.push({
+        type: "text",
+        text: `${currentCode}\n\nUser feedback: ${feedback}\n\nPlease update the code based on this feedback.`,
+      });
+
+      // Add image if provided
+      if (imageFile) {
+        console.log("[CODEBUILDER] Encoding image to base64 for refinement...");
+        const base64Image = imageFile.buffer.toString("base64");
+        userMessageContent.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${imageFile.mimetype};base64,${base64Image}`,
+            detail: "high", // Use high detail for better UI analysis
+          },
+        });
+        console.log("[CODEBUILDER] ✓ Image added to refinement request");
+      }
+
       const stream = await openai.chat.completions.create({
         model: "gpt-5.2-2025-12-11",
         messages: [
@@ -289,7 +389,7 @@ Only include files that were modified. Unchanged files can be omitted.`;
           },
           {
             role: "user",
-            content: `${currentCode}\n\nUser feedback: ${feedback}\n\nPlease update the code based on this feedback.`,
+            content: userMessageContent,
           },
         ],
         stream: true,
