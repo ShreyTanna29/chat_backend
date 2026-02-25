@@ -355,6 +355,7 @@ IMPORTANT RULES:
 5. Apply the requested changes while preserving working functionality
 6. If an image/mockup is provided, use it as reference for visual changes
 7. Match colors, layouts, typography, and spacing from any provided design images
+8. When asked to explain, only explain and do not generate code.
 
 FILE FORMAT:
 Output files in this exact format:
