@@ -464,7 +464,9 @@ router.post(
   auth,
   [
     body("name").optional().trim().isLength({ max: 100 }),
-    body("files").isArray({ min: 1 }).withMessage("files must be a non-empty array"),
+    body("files")
+      .isArray({ min: 1 })
+      .withMessage("files must be a non-empty array"),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -475,11 +477,12 @@ router.post(
     const { name = "react-app", files } = req.body;
 
     // Build a URL-safe slug: sanitised name + 6 random hex chars for uniqueness
-    const safeName = name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .substring(0, 50) || "react-app";
+    const safeName =
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .substring(0, 50) || "react-app";
     const suffix = crypto.randomBytes(3).toString("hex");
     const slug = `${safeName}-${suffix}`;
 
@@ -490,7 +493,9 @@ router.post(
       res.json({ success: true, slug: project.slug });
     } catch (err) {
       console.error("[CODEBUILDER] Publish error:", err);
-      res.status(500).json({ success: false, message: "Failed to publish project" });
+      res
+        .status(500)
+        .json({ success: false, message: "Failed to publish project" });
     }
   },
 );
@@ -506,12 +511,16 @@ router.get("/projects/:slug", async (req, res) => {
       select: { slug: true, name: true, files: true, createdAt: true },
     });
     if (!project) {
-      return res.status(404).json({ success: false, message: "Project not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Project not found" });
     }
     res.json({ success: true, project });
   } catch (err) {
     console.error("[CODEBUILDER] Fetch project error:", err);
-    res.status(500).json({ success: false, message: "Failed to fetch project" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch project" });
   }
 });
 
