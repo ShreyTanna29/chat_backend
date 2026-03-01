@@ -3,6 +3,8 @@ const OpenAI = require("openai");
 const auth = require("../middleware/auth");
 const { body, validationResult } = require("express-validator");
 const multer = require("multer");
+const prisma = require("../config/database");
+const crypto = require("crypto");
 
 const router = express.Router();
 
@@ -452,5 +454,65 @@ Only include files that were modified. Unchanged files can be omitted.`;
     }
   },
 );
+
+/**
+ * POST /api/codebuilder/projects
+ * Publish (save) a generated project so it can be previewed at /preview/:slug
+ */
+router.post(
+  "/projects",
+  auth,
+  [
+    body("name").optional().trim().isLength({ max: 100 }),
+    body("files").isArray({ min: 1 }).withMessage("files must be a non-empty array"),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { name = "react-app", files } = req.body;
+
+    // Build a URL-safe slug: sanitised name + 6 random hex chars for uniqueness
+    const safeName = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .substring(0, 50) || "react-app";
+    const suffix = crypto.randomBytes(3).toString("hex");
+    const slug = `${safeName}-${suffix}`;
+
+    try {
+      const project = await prisma.codeProject.create({
+        data: { slug, name, userId: req.user.id, files },
+      });
+      res.json({ success: true, slug: project.slug });
+    } catch (err) {
+      console.error("[CODEBUILDER] Publish error:", err);
+      res.status(500).json({ success: false, message: "Failed to publish project" });
+    }
+  },
+);
+
+/**
+ * GET /api/codebuilder/projects/:slug
+ * Fetch a published project by slug — public, no auth required
+ */
+router.get("/projects/:slug", async (req, res) => {
+  try {
+    const project = await prisma.codeProject.findUnique({
+      where: { slug: req.params.slug },
+      select: { slug: true, name: true, files: true, createdAt: true },
+    });
+    if (!project) {
+      return res.status(404).json({ success: false, message: "Project not found" });
+    }
+    res.json({ success: true, project });
+  } catch (err) {
+    console.error("[CODEBUILDER] Fetch project error:", err);
+    res.status(500).json({ success: false, message: "Failed to fetch project" });
+  }
+});
 
 module.exports = router;
