@@ -163,14 +163,20 @@ Generate complete, production-ready React code. Each file should be self-contain
           },
         ],
         stream: true,
+        stream_options: { include_usage: true },
       });
 
       // Track accumulated response
       let fullResponse = "";
+      let usageData = null;
 
       // Stream the response
       for await (const chunk of stream) {
         const content = chunk.choices[0]?.delta?.content || "";
+
+        if (chunk.usage) {
+          usageData = chunk.usage;
+        }
 
         if (content) {
           fullResponse += content;
@@ -197,6 +203,7 @@ Generate complete, production-ready React code. Each file should be self-contain
               type: "complete",
               files: files,
               totalFiles: files.length,
+              usage: usageData,
             })}\n\n`,
           );
 
@@ -405,12 +412,18 @@ Only include files that were modified. Unchanged files can be omitted.`;
           },
         ],
         stream: true,
+        stream_options: { include_usage: true },
       });
 
       let fullResponse = "";
+      let usageData = null;
 
       for await (const chunk of stream) {
         const content = chunk.choices[0]?.delta?.content || "";
+
+        if (chunk.usage) {
+          usageData = chunk.usage;
+        }
 
         if (content) {
           fullResponse += content;
@@ -432,6 +445,7 @@ Only include files that were modified. Unchanged files can be omitted.`;
               type: "complete",
               files: updatedFiles,
               totalFiles: updatedFiles.length,
+              usage: usageData,
             })}\n\n`,
           );
 
