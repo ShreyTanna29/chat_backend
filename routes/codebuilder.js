@@ -5,6 +5,266 @@ const { body, validationResult } = require("express-validator");
 const multer = require("multer");
 const prisma = require("../config/database");
 const crypto = require("crypto");
+const os = require("os");
+const path = require("path");
+const fs = require("fs");
+const { exec } = require("child_process");
+const { promisify } = require("util");
+
+const execAsync = promisify(exec);
+
+// ---------------------------------------------------------------------------
+// Build helpers — replicate the frontend buildEmbedFiles / buildPackageJson
+// logic so the server can run a real Vite production build.
+// ---------------------------------------------------------------------------
+
+const KNOWN_PACKAGE_VERSIONS = {
+  "react-router-dom": "^6.26.0",
+  "react-router": "^6.26.0",
+  axios: "^1.7.7",
+  "lucide-react": "^0.400.0",
+  "framer-motion": "^11.5.0",
+  zustand: "^5.0.0",
+  "react-hook-form": "^7.53.0",
+  zod: "^3.23.8",
+  "date-fns": "^4.1.0",
+  "@tanstack/react-query": "^5.59.0",
+  clsx: "^2.1.1",
+  "class-variance-authority": "^0.7.0",
+  "tailwind-merge": "^2.5.0",
+  tailwindcss: "^3.4.13",
+  "@emotion/react": "^11.13.3",
+  "@emotion/styled": "^11.13.0",
+  "@mui/material": "^6.1.1",
+  "styled-components": "^6.1.13",
+  uuid: "^10.0.0",
+  "react-icons": "^5.3.0",
+  recharts: "^2.12.7",
+  "chart.js": "^4.4.4",
+  "react-chartjs-2": "^5.2.0",
+  lodash: "^4.17.21",
+  "lodash-es": "^4.17.21",
+  immer: "^10.1.1",
+};
+
+const DEFAULT_TEMPLATE_FILES = {
+  "src/App.jsx": `export default function App() {
+  return (
+    <div style={{ fontFamily: 'sans-serif', textAlign: 'center', padding: '4rem 2rem' }}>
+      <h1>Code Builder</h1>
+    </div>
+  );
+}
+`,
+  "src/main.jsx": `import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import App from './App';
+createRoot(document.getElementById('root')).render(<StrictMode><App /></StrictMode>);
+`,
+  "index.html": `<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>App</title></head>
+  <body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body>
+</html>
+`,
+};
+
+function buildPackageJson(files, projectName) {
+  const aiPkgFile = files.find(
+    (f) => f.path === "package.json" || f.path.endsWith("/package.json"),
+  );
+  if (aiPkgFile) {
+    try {
+      const parsed = JSON.parse(aiPkgFile.content);
+      parsed.devDependencies = {
+        "@vitejs/plugin-react": "^4.3.4",
+        vite: "^5.4.10",
+        ...parsed.devDependencies,
+      };
+      parsed.scripts = { dev: "vite", build: "vite build", ...parsed.scripts };
+      return JSON.stringify(parsed, null, 2);
+    } catch {
+      // fall through
+    }
+  }
+
+  const sourceFiles = files.filter((f) => /\.(jsx?|tsx?)$/.test(f.path));
+  const detectedPackages = new Set();
+  const importRe =
+    /(?:import\s+(?:.+?\s+from\s+)?['"]|require\s*\(\s*['"])([^'"./][^'"]*)['"]/g;
+
+  for (const f of sourceFiles) {
+    let match;
+    while ((match = importRe.exec(f.content)) !== null) {
+      const pkg = match[1];
+      const root = pkg.startsWith("@")
+        ? pkg.split("/").slice(0, 2).join("/")
+        : pkg.split("/")[0];
+      if (root && !["react", "react-dom"].includes(root)) {
+        detectedPackages.add(root);
+      }
+    }
+  }
+
+  const extraDeps = {};
+  for (const pkg of detectedPackages) {
+    extraDeps[pkg] = KNOWN_PACKAGE_VERSIONS[pkg] ?? "latest";
+  }
+
+  return JSON.stringify(
+    {
+      name: (projectName || "react-app").replace(/\s+/g, "-").toLowerCase(),
+      version: "0.0.0",
+      private: true,
+      scripts: { dev: "vite", build: "vite build" },
+      dependencies: { react: "^18.3.1", "react-dom": "^18.3.1", ...extraDeps },
+      devDependencies: { "@vitejs/plugin-react": "^4.3.4", vite: "^5.4.10" },
+    },
+    null,
+    2,
+  );
+}
+
+/** Build a complete file map (defaults + AI files + generated package.json). */
+function buildAllFiles(files, projectName) {
+  const allFiles = { ...DEFAULT_TEMPLATE_FILES };
+  for (const f of files) {
+    if (f.path === "package.json") continue;
+    allFiles[f.path] = f.content;
+  }
+  allFiles["package.json"] = buildPackageJson(files, projectName);
+  // Use relative base so assets resolve correctly when served from any URL prefix
+  allFiles["vite.config.js"] = `import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+export default defineConfig({ plugins: [react()], base: './' });
+`;
+  return allFiles;
+}
+
+const BINARY_EXTENSIONS = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".ico",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".eot",
+  ".otf",
+  ".mp4",
+  ".webm",
+  ".ogg",
+  ".mp3",
+  ".pdf",
+  ".zip",
+]);
+
+function readDistFiles(distDir, baseDir = distDir) {
+  const result = {};
+  const entries = fs.readdirSync(distDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(distDir, entry.name);
+    const relPath = path.relative(baseDir, fullPath).replace(/\\/g, "/");
+    if (entry.isDirectory()) {
+      Object.assign(result, readDistFiles(fullPath, baseDir));
+    } else {
+      const ext = path.extname(entry.name).toLowerCase();
+      const binary = BINARY_EXTENSIONS.has(ext);
+      result[relPath] = {
+        content: binary
+          ? fs.readFileSync(fullPath).toString("base64")
+          : fs.readFileSync(fullPath, "utf-8"),
+        binary,
+      };
+    }
+  }
+  return result;
+}
+
+const MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".eot": "application/vnd.ms-fontobject",
+  ".txt": "text/plain; charset=utf-8",
+};
+
+function getMimeType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return MIME_TYPES[ext] || "application/octet-stream";
+}
+
+/**
+ * Build the project in a temp directory and store the dist output in the DB.
+ * Runs asynchronously in the background after the API has already responded.
+ */
+async function buildProjectInBackground(slug, files, name) {
+  const buildDir = path.join(os.tmpdir(), "codebuilder-builds", slug);
+  console.log(`[CODEBUILDER BUILD] Starting build for ${slug} in ${buildDir}`);
+
+  try {
+    // Write all source files
+    const allFiles = buildAllFiles(files, name);
+    for (const [filePath, content] of Object.entries(allFiles)) {
+      const absPath = path.join(buildDir, filePath);
+      fs.mkdirSync(path.dirname(absPath), { recursive: true });
+      fs.writeFileSync(absPath, content, "utf-8");
+    }
+
+    // Install dependencies
+    console.log(`[CODEBUILDER BUILD] Running npm install for ${slug}`);
+    await execAsync("npm install --prefer-offline", {
+      cwd: buildDir,
+      timeout: 180_000,
+    });
+
+    // Build
+    console.log(`[CODEBUILDER BUILD] Running vite build for ${slug}`);
+    await execAsync("npm run build", { cwd: buildDir, timeout: 120_000 });
+
+    // Read dist output
+    const distDir = path.join(buildDir, "dist");
+    const distFiles = readDistFiles(distDir);
+    console.log(
+      `[CODEBUILDER BUILD] Build succeeded for ${slug} — ${Object.keys(distFiles).length} files`,
+    );
+
+    await prisma.codeProject.update({
+      where: { slug },
+      data: { distFiles, buildStatus: "ready" },
+    });
+  } catch (err) {
+    console.error(`[CODEBUILDER BUILD] Build failed for ${slug}:`, err.message);
+    await prisma.codeProject.update({
+      where: { slug },
+      data: {
+        buildStatus: "failed",
+        buildError: err.message || "Build failed",
+      },
+    });
+  } finally {
+    // Clean up temp directory
+    try {
+      fs.rmSync(buildDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+}
 
 const router = express.Router();
 
@@ -501,10 +761,24 @@ router.post(
     const slug = `${safeName}-${suffix}`;
 
     try {
+      // Create the project record immediately with buildStatus "building"
       const project = await prisma.codeProject.create({
-        data: { slug, name, userId: req.user.id, files },
+        data: {
+          slug,
+          name,
+          userId: req.user.id,
+          files,
+          buildStatus: "building",
+        },
       });
+
+      // Respond immediately so the client can open the preview URL right away
       res.json({ success: true, slug: project.slug });
+
+      // Kick off the Vite build in the background (don't await)
+      buildProjectInBackground(slug, files, name).catch((err) => {
+        console.error("[CODEBUILDER] Unexpected build error for", slug, err);
+      });
     } catch (err) {
       console.error("[CODEBUILDER] Publish error:", err);
       res
@@ -522,7 +796,14 @@ router.get("/projects/:slug", async (req, res) => {
   try {
     const project = await prisma.codeProject.findUnique({
       where: { slug: req.params.slug },
-      select: { slug: true, name: true, files: true, createdAt: true },
+      select: {
+        slug: true,
+        name: true,
+        files: true,
+        buildStatus: true,
+        buildError: true,
+        createdAt: true,
+      },
     });
     if (!project) {
       return res
@@ -535,6 +816,64 @@ router.get("/projects/:slug", async (req, res) => {
     res
       .status(500)
       .json({ success: false, message: "Failed to fetch project" });
+  }
+});
+
+/**
+ * GET /api/codebuilder/projects/:slug/dist/*
+ * Serve the pre-built static files for a deployed project.
+ * Falls back to index.html so client-side SPA routing still works.
+ */
+router.use("/projects/:slug/dist", async (req, res) => {
+  try {
+    const project = await prisma.codeProject.findUnique({
+      where: { slug: req.params.slug },
+      select: { buildStatus: true, distFiles: true },
+    });
+
+    if (!project) {
+      return res.status(404).send("Project not found");
+    }
+
+    if (project.buildStatus !== "ready" || !project.distFiles) {
+      const status = project.buildStatus;
+      return res
+        .status(503)
+        .send(
+          status === "building"
+            ? "Build in progress — please wait."
+            : status === "failed"
+              ? "Build failed."
+              : "Project not yet built.",
+        );
+    }
+
+    // req.path inside router.use is the remainder after the prefix
+    let filePath = req.path.replace(/^\//, "") || "index.html";
+    if (filePath.endsWith("/")) filePath += "index.html";
+
+    const distFiles = project.distFiles;
+    let fileEntry = distFiles[filePath];
+
+    // SPA fallback: serve index.html for unknown paths
+    if (!fileEntry) {
+      fileEntry = distFiles["index.html"];
+      if (!fileEntry) return res.status(404).send("File not found");
+      filePath = "index.html";
+    }
+
+    const mimeType = getMimeType(filePath);
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+
+    if (fileEntry.binary) {
+      res.send(Buffer.from(fileEntry.content, "base64"));
+    } else {
+      res.send(fileEntry.content);
+    }
+  } catch (err) {
+    console.error("[CODEBUILDER] Serve dist error:", err);
+    res.status(500).send("Internal server error");
   }
 });
 

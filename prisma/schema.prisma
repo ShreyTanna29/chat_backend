@@ -164,14 +164,17 @@ model Session {
 
 /// CodeProject: Stores published projects from the Code Builder feature
 model CodeProject {
-  id        String   @id @default(cuid())
-  slug      String   @unique // URL-safe name, e.g. "my-app-k7x2f"
-  name      String // Human-readable project name
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  files     Json // Array of { path, content, type }
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(cuid())
+  slug        String   @unique // URL-safe name, e.g. "my-app-k7x2f"
+  name        String // Human-readable project name
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  files       Json // Array of { path, content, type }
+  distFiles   Json? // Built static files: { "index.html": { content, binary } ... }
+  buildStatus String   @default("pending") // "pending" | "building" | "ready" | "failed"
+  buildError  String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([userId])
   @@map("code_projects")
